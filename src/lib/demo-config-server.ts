@@ -83,7 +83,15 @@ async function loadDemoConfigRow() {
 export async function getDemoModeConfigServer(): Promise<DemoModePublicConfigSnapshot> {
   const now = new Date();
   if (process.env.ZERONE_DEMO_MODE === "1") {
-    return { source: "local", enabled: true, active: true, startsAt: null, expiresAt: null, serverNow: now.toISOString() };
+    return {
+      source: "local", enabled: true, active: true, startsAt: null, expiresAt: null,
+      serverNow: now.toISOString(),
+      modelReady: Boolean(
+        process.env.OPENAI_COMPAT_BASE_URL?.trim() &&
+        process.env.OPENAI_COMPAT_API_KEY?.trim() &&
+        process.env.OPENAI_COMPAT_MODEL?.trim(),
+      ),
+    };
   }
 
   try {

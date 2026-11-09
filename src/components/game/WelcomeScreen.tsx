@@ -22,6 +22,7 @@ import { LocaleSwitcher } from "@/components/game/LocaleSwitcher";
 import { CustomCharacterModal } from "@/components/game/CustomCharacterModal";
 import { useCustomCharacters } from "@/hooks/useCustomCharacters";
 import { useCredits, type ConsumeCreditResult } from "@/hooks/useCredits";
+import { fetchDemoModeConfigClient } from "@/lib/demo-config";
 import { difficultyAtom, playerCountAtom, preferredRoleAtom } from "@/store/settings";
 import {
   getGeneratorModel,
@@ -286,6 +287,11 @@ export function WelcomeScreen({
   } = useCredits();
   const [isSetupOpen, setIsSetupOpen] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [demoModelReady, setDemoModelReady] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE !== "1") return;
+    void fetchDemoModeConfigClient(true).then((snapshot) => setDemoModelReady(snapshot.modelReady === true));
+  }, []);
   const paperRef = useRef<HTMLDivElement | null>(null);
   const sealButtonRef = useRef<HTMLButtonElement | null>(null);
   const isStartingRef = useRef(false);
@@ -596,8 +602,8 @@ export function WelcomeScreen({
   }, [playerCount, t]);
 
   const canConfirm = useMemo(() => {
-    return !!humanName.trim() && !isLoading && !isTransitioning && (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" || !creditsLoading);
-  }, [humanName, isLoading, isTransitioning, creditsLoading]);
+    return !!humanName.trim() && !isLoading && !isTransitioning && (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" ? demoModelReady === true : !creditsLoading);
+  }, [humanName, isLoading, isTransitioning, creditsLoading, demoModelReady]);
 
   const isAnyModalOpen =
     isSetupOpen ||
@@ -856,6 +862,11 @@ export function WelcomeScreen({
     }
     const latestDemoConfig = await refreshDemoConfig(true);
     const demoModeActive = latestDemoConfig.active;
+    if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" && latestDemoConfig.modelReady !== true) {
+      setDemoModelReady(false);
+      toast.error("模型尚未配置：请在 .env.local 填写 OPENAI_COMPAT_BASE_URL、OPENAI_COMPAT_API_KEY 和 OPENAI_COMPAT_MODEL，然后重启服务。");
+      return;
+    }
 
     // Demo mode: allow guests and skip credit checks
     if (!user && !demoModeActive) {
@@ -947,6 +958,12 @@ export function WelcomeScreen({
           <label htmlFor="demo-player-name" className="block mb-2">你的名字</label>
           <input id="demo-player-name" value={humanName} onChange={(event) => setHumanName(event.target.value)}
             className="w-full rounded-lg bg-[#171614] border border-[#9c8053] px-4 py-3 mb-6" placeholder="输入名字" />
+          {demoModelReady !== true && (
+            <div role="status" className="mb-5 rounded-lg border border-[#9c8053] p-3 text-sm text-[#ead1a6]">
+              {demoModelReady === null ? "正在检查模型配置…" : "模型尚未配置。请先填写 .env.local 中的三个 OPENAI_COMPAT_* 变量并重启服务。"}
+              <button type="button" className="block mt-2 underline" onClick={() => void fetchDemoModeConfigClient(true).then((snapshot) => setDemoModelReady(snapshot.modelReady === true))}>重新检查</button>
+            </div>
+          )}
           <button type="button" disabled={!canConfirm} onClick={() => void handleConfirm()}
             className="w-full rounded-lg bg-[#c49a54] text-[#171614] px-4 py-3 font-semibold disabled:opacity-50">
             {isTransitioning ? "正在开局…" : "开始游戏"}

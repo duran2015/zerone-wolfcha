@@ -20,7 +20,7 @@ pnpm dev
 | 条目 | 结果 | 证据 |
 |---|---|---|
 | 按文档启动并完整玩完一局 | 未通过 | Next.js 开发服务和首页已启动；缺真实 OpenAI 兼容模型密钥，尚未完成夜晚、白天、投票、胜负的实局。 |
-| 页面不见支付、积分、登录入口 | 部分通过 | 本地演示首页 HTML 仅有 Wolfcha 和“AI 居民”，未含“赞助”“登录”“积分”；对局内页面待真实对局目视检查。 |
+| 页面不见支付、积分、登录入口 | 部分通过 | 本地演示首页 HTML 仅有 Wolfcha 和“AI 居民”，未含“赞助”“登录”“积分”；缺模型配置时开局按钮禁用并显示具体配置提示。对局内页面待真实对局目视检查。 |
 | 不需要 ZenMux、DashScope、TokenDance、Supabase 账号 | 通过（启动与模型协议测试） | `ZERONE_DEMO_MODE=1` 时 `/api/demo-config` 返回 active；本地模拟 OpenAI 兼容服务的普通、SSE、批量 `/api/chat` 均返回 200。 |
 | 不提交密钥 | 通过 | 仅 `.env.example` 入库，`.env.local` 在 `.gitignore` 中；Git diff 未含真实密钥。 |
 
@@ -36,7 +36,7 @@ pnpm dev
 | `src/app/page.tsx` | 本地演示不挂载 TokenPay 恢复弹窗。 |
 | `src/components/game/WelcomeScreen.tsx` | 演示首页只呈现姓名和开局入口。 |
 | `src/lib/api-auth.ts` | 演示模式用本地访客 ID 通过聊天鉴权与场次限制。 |
-| `src/lib/demo-config.ts`、`src/lib/demo-config-server.ts` | 显式本地演示模式，避免从 Supabase 表读取开关。 |
+| `src/lib/demo-config.ts`、`src/lib/demo-config-server.ts` | 显式本地演示模式与模型就绪状态，避免从 Supabase 表读取开关。 |
 | `src/lib/supabase.ts`、`src/lib/supabase-admin.ts` | 演示模式提供仅供初始化的占位地址，避免无 Supabase 配置时模块加载失败。 |
 | `docs/zerone-demo-setup.md` | 记录从零启动命令及模型配置。 |
 

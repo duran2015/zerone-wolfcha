@@ -7,6 +7,7 @@ export type DemoModePublicConfigSnapshot = {
   startsAt: string | null;
   expiresAt: string | null;
   serverNow: string;
+  modelReady?: boolean;
 };
 
 const DEMO_CONFIG_ENDPOINT = "/api/demo-config";
@@ -67,6 +68,7 @@ export async function fetchDemoModeConfigClient(forceRefresh = false): Promise<D
           typeof payload.serverNow === "string"
             ? payload.serverNow
             : new Date().toISOString(),
+        modelReady: payload.modelReady === true,
       };
 
       setCachedDemoModeConfig(snapshot);
