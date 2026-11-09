@@ -9,7 +9,7 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-打开 <http://localhost:3000>。`OPENAI_COMPAT_BASE_URL` 应为 OpenAI 兼容 API 的 `/v1` 基础地址，不含 `/chat/completions`；密钥只留在本机 `.env.local`。`ZERONE_DEMO_MODE=1` 启用本地访客模式，游戏存档留在浏览器 localStorage。此模式不需要 Supabase、ZenMux、DashScope 或 TokenDance 账号。
+打开 <http://localhost:3000>。`OPENAI_COMPAT_BASE_URL` 填服务商提供的 OpenAI 兼容 API 基础地址，不含 `/chat/completions`；并非所有服务商都以 `/v1` 结尾。例如 DeepSeek 官方直连接口使用 `https://api.deepseek.com`。密钥只留在本机 `.env.local`。`ZERONE_DEMO_MODE=1` 启用本地访客模式，游戏存档留在浏览器 localStorage。此模式不需要 Supabase、ZenMux、DashScope 或 TokenDance 账号。
 
 首页会检查这三个模型变量；未填写时显示配置提示并禁用“开始游戏”。填写后重启 `pnpm dev`，再点“重新检查”。
 
