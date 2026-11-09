@@ -1257,7 +1257,7 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-transparent">
-      <TokenPayRecoveryHost />
+      {process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE !== "1" && <TokenPayRecoveryHost />}
       <GameBackground isNight={visualIsNight} isBlinking={!!dayNightBlinkPhase} />
 
       <motion.div

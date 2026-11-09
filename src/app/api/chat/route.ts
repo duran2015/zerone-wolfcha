@@ -747,6 +747,52 @@ async function runBatchItem(
 }
 
 export async function POST(request: NextRequest) {
+  if (process.env.ZERONE_DEMO_MODE === "1") {
+    const guestId = request.headers.get("x-guest-id");
+    if (!guestId?.startsWith("guest_")) return NextResponse.json({ error: "Demo guest ID required" }, { status: 401 });
+    const base = process.env.OPENAI_COMPAT_BASE_URL?.replace(/\/$/, "");
+    const key = process.env.OPENAI_COMPAT_API_KEY;
+    const model = process.env.OPENAI_COMPAT_MODEL;
+    if (!base || !key || !model) return NextResponse.json({ error: "OPENAI_COMPAT_* is not configured" }, { status: 503 });
+    try {
+      const body = await request.json();
+      const invoke = async (item: Record<string, unknown>) => {
+        const upstream = await fetch(`${base}/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages: item.messages,
+            temperature: item.temperature,
+            max_tokens: item.max_tokens,
+            response_format: item.response_format,
+            stream: item.stream === true,
+          }),
+          signal: AbortSignal.timeout(API_TIMEOUT_MS),
+        });
+        return upstream;
+      };
+      if (Array.isArray(body.requests)) {
+        if (body.requests.length > MAX_BATCH_REQUESTS) return NextResponse.json({ error: "Too many batch requests" }, { status: 400 });
+        const results = await Promise.all(body.requests.map(async (item: Record<string, unknown>) => {
+          if (!Array.isArray(item.messages) || item.stream === true) return { ok: false, status: 400, error: "Invalid batch request" };
+          const upstream = await invoke(item);
+          if (!upstream.ok) return { ok: false, status: upstream.status, error: `Model service returned HTTP ${upstream.status}` };
+          return { ok: true, status: 200, data: await upstream.json() };
+        }));
+        return NextResponse.json({ results });
+      }
+      if (!Array.isArray(body.messages)) return NextResponse.json({ error: "Invalid messages" }, { status: 400 });
+      const upstream = await invoke(body);
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: { "Content-Type": upstream.headers.get("content-type") || (body.stream ? "text/event-stream" : "application/json") },
+      });
+    } catch (error) {
+      console.error("[zerone-demo] model request failed", error);
+      return NextResponse.json({ error: "Model request failed" }, { status: 502 });
+    }
+  }
   const auth = await authenticateRequest(request as unknown as Request);
   if ("error" in auth) return auth.error;
 

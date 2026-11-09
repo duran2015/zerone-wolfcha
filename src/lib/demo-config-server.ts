@@ -82,6 +82,9 @@ async function loadDemoConfigRow() {
 
 export async function getDemoModeConfigServer(): Promise<DemoModePublicConfigSnapshot> {
   const now = new Date();
+  if (process.env.ZERONE_DEMO_MODE === "1") {
+    return { source: "local", enabled: true, active: true, startsAt: null, expiresAt: null, serverNow: now.toISOString() };
+  }
 
   try {
     ensureAdminClient();

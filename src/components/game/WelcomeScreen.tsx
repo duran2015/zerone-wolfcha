@@ -596,7 +596,7 @@ export function WelcomeScreen({
   }, [playerCount, t]);
 
   const canConfirm = useMemo(() => {
-    return !!humanName.trim() && !isLoading && !isTransitioning && !creditsLoading;
+    return !!humanName.trim() && !isLoading && !isTransitioning && (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" || !creditsLoading);
   }, [humanName, isLoading, isTransitioning, creditsLoading]);
 
   const isAnyModalOpen =
@@ -937,6 +937,24 @@ export function WelcomeScreen({
     ) : (
       <Users size={16} />
     );
+
+  if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1") {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-[#171614] text-[#f5ead0] p-6">
+        <section className="w-full max-w-md rounded-2xl border border-[#9c8053] bg-[#25221d] p-8 shadow-2xl">
+          <h1 className="text-4xl font-serif mb-2">Wolfcha</h1>
+          <p className="mb-8 text-[#d2bea0]">与 AI 居民玩一局狼人杀</p>
+          <label htmlFor="demo-player-name" className="block mb-2">你的名字</label>
+          <input id="demo-player-name" value={humanName} onChange={(event) => setHumanName(event.target.value)}
+            className="w-full rounded-lg bg-[#171614] border border-[#9c8053] px-4 py-3 mb-6" placeholder="输入名字" />
+          <button type="button" disabled={!canConfirm} onClick={() => void handleConfirm()}
+            className="w-full rounded-lg bg-[#c49a54] text-[#171614] px-4 py-3 font-semibold disabled:opacity-50">
+            {isTransitioning ? "正在开局…" : "开始游戏"}
+          </button>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <>

@@ -1,7 +1,7 @@
 import { fetchWithTimeout } from "@/lib/request-timeout";
 
 export type DemoModePublicConfigSnapshot = {
-  source: "database";
+  source: "database" | "local";
   enabled: boolean;
   active: boolean;
   startsAt: string | null;
@@ -58,7 +58,7 @@ export async function fetchDemoModeConfigClient(forceRefresh = false): Promise<D
 
       const payload = (await response.json()) as Partial<DemoModePublicConfigSnapshot>;
       const snapshot: DemoModePublicConfigSnapshot = {
-        source: "database",
+        source: payload.source === "local" ? "local" : "database",
         enabled: payload.enabled === true,
         active: payload.active === true,
         startsAt: typeof payload.startsAt === "string" ? payload.startsAt : null,
