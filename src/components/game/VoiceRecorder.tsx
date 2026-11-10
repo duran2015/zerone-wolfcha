@@ -142,6 +142,10 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
     const [status, setStatus] = useState<RecorderStatus>("idle");
     const [error, setError] = useState<string | null>(null);
     const [seconds, setSeconds] = useState(0);
+    const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
+    const [selectedDeviceId, setSelectedDeviceId] = useState("");
+    const [activeDevice, setActiveDevice] = useState("");
+    const [inputLevel, setInputLevel] = useState(0);
 
     const timerRef = useRef<number | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
@@ -149,6 +153,8 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
     const chunksRef = useRef<BlobPart[]>([]);
     const stopRequestedRef = useRef(false);
     const releaseStreamTimerRef = useRef<number | null>(null);
+    const meterContextRef = useRef<AudioContext | null>(null);
+    const meterTimerRef = useRef<number | null>(null);
 
     const isRecording = status === "recording";
   const isBusy = status !== "idle";
@@ -158,6 +164,32 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
   const canUse = useMemo(() => {
     return typeof window !== "undefined" && typeof navigator !== "undefined";
   }, []);
+
+  const stopMeter = useCallback(() => {
+    if (meterTimerRef.current !== null) window.clearInterval(meterTimerRef.current);
+    meterTimerRef.current = null;
+    void meterContextRef.current?.close().catch(() => undefined);
+    meterContextRef.current = null;
+    setInputLevel(0);
+  }, []);
+
+  const startMeter = useCallback((stream: MediaStream) => {
+    stopMeter();
+    try {
+      const context = new AudioContext();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      context.createMediaStreamSource(stream).connect(analyser);
+      meterContextRef.current = context;
+      const samples = new Uint8Array(analyser.fftSize);
+      meterTimerRef.current = window.setInterval(() => {
+        analyser.getByteTimeDomainData(samples);
+        let energy = 0;
+        for (const sample of samples) energy += ((sample - 128) / 128) ** 2;
+        setInputLevel(Math.min(100, Math.round(Math.sqrt(energy / samples.length) * 300)));
+      }, 120);
+    } catch { /* the recorder can still work without a visual meter */ }
+  }, [stopMeter]);
 
   const stopStreamNow = useCallback(() => {
     if (releaseStreamTimerRef.current) {
@@ -186,6 +218,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
   }, [stopStreamNow]);
 
   const cleanupMedia = useCallback(() => {
+    stopMeter();
     if (timerRef.current) {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
@@ -200,7 +233,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
     }
 
     chunksRef.current = [];
-  }, []);
+  }, [stopMeter]);
 
   useEffect(() => {
     if (!sttEnabled) {
@@ -218,10 +251,16 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
       if (live) return streamRef.current;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
+    });
     streamRef.current = stream;
+    setActiveDevice(stream.getAudioTracks()[0]?.label || "系统默认麦克风");
+    void navigator.mediaDevices.enumerateDevices().then((devices) => {
+      setInputDevices(devices.filter((device) => device.kind === "audioinput"));
+    }).catch(() => undefined);
     return stream;
-  }, []);
+  }, [selectedDeviceId]);
 
   const prepare = useCallback(() => {
     if (!canUse) return;
@@ -330,6 +369,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
       setStatus("recording");
       recorder.start();
+      startMeter(stream);
 
       timerRef.current = window.setInterval(() => {
         setSeconds((s) => s + 1);
@@ -340,7 +380,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
       cleanupMedia();
       scheduleReleaseStream();
     }
-  }, [acquireStream, canUse, cleanupMedia, isBusy, onTranscript, scheduleReleaseStream, sttDisabled]);
+  }, [acquireStream, canUse, cleanupMedia, isBusy, onTranscript, scheduleReleaseStream, startMeter, sttDisabled]);
 
   const stop = useCallback(() => {
     if (status === "idle") return;
@@ -422,10 +462,37 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
         )}
       </button>
 
+      {isRecording && (
+        <div className="absolute bottom-full right-0 z-20 mb-2 w-56 rounded-md border border-[var(--border-color)] bg-white p-2 text-xs text-[#211e1b] shadow-lg">
+          <div className="truncate" title={activeDevice}>输入设备：{activeDevice}</div>
+          <div className="mt-1 h-2 overflow-hidden rounded-full bg-[#ddd5c9]" aria-label={`麦克风音量 ${inputLevel}%`}>
+            <div className="h-full bg-[#c59a52] transition-[width]" style={{ width: `${inputLevel}%` }} />
+          </div>
+          <div className="mt-1">对着麦克风说话时，音量条应该跳动</div>
+        </div>
+      )}
+      {!isRecording && status === "idle" && inputDevices.length > 1 && (
+        <select
+          aria-label="选择麦克风"
+          value={selectedDeviceId}
+          onChange={(event) => {
+            stopStreamNow();
+            setSelectedDeviceId(event.target.value);
+          }}
+          className="absolute bottom-full right-0 mb-2 max-w-56 rounded-md border border-[var(--border-color)] bg-white px-2 py-1 text-xs text-[#211e1b]"
+        >
+          <option value="">系统默认麦克风</option>
+          {inputDevices.filter((device) => device.deviceId && device.deviceId !== "default").map((device, index) => (
+            <option key={device.deviceId} value={device.deviceId}>{device.label || `麦克风 ${index + 1}`}</option>
+          ))}
+        </select>
+      )}
+
       {error ? (
         <div
           className={cn(
-            "absolute right-0 bottom-full z-20 mb-2 w-64 max-w-[75vw] rounded-md border p-2 text-xs leading-relaxed shadow-lg",
+            "absolute right-0 z-20 w-64 max-w-[75vw] rounded-md border p-2 text-xs leading-relaxed shadow-lg",
+            inputDevices.length > 1 && status === "idle" ? "bottom-[calc(100%+2.5rem)]" : "bottom-full mb-2",
             isNight ? "border-white/20 bg-[#211e1b] text-white" : "border-[var(--border-color)] bg-white text-[var(--text-primary)]"
           )}
         >
