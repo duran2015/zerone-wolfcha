@@ -102,6 +102,13 @@ async function decodeToWav(blob: Blob): Promise<Uint8Array> {
     if (audioBuffer.duration < 0.8) {
       throw new Error("录音太短，请说完一句话再结束");
     }
+    const samples = audioBuffer.getChannelData(0);
+    let energy = 0;
+    for (let i = 0; i < samples.length; i++) energy += samples[i] * samples[i];
+    const rms = Math.sqrt(energy / Math.max(1, samples.length));
+    if (rms < 0.001) {
+      throw new Error("麦克风录到的声音几乎是静音。请检查系统输入设备和麦克风音量");
+    }
     const wavAb = audioBufferToWav(audioBuffer);
     return new Uint8Array(wavAb);
   } finally {
@@ -404,6 +411,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
           <>
             <StopCircle size={14} weight="fill" />
             <WaveBars tone="danger" />
+            <span>录音中</span>
             {formatDuration(seconds)}
           </>
         ) : (
