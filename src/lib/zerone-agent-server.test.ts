@@ -23,6 +23,11 @@ test("九个居民分别路由到自己的 Zerone Agent，且保留当前角色�
       if (seen.filter((id) => id === characterId).length === 1) assert.equal(body.sessionId, undefined);
       else assert.equal(body.sessionId, `runtime-${characterId}`);
       assert.equal(JSON.parse(body.message).messages[0].content, "玩家公开发言：先看票型");
+      if (body.stream) {
+        assert.equal(new Headers(init?.headers).get("Accept"), "text/event-stream");
+        return new Response(`event: system\ndata: {"sessionId":"runtime-${characterId}"}\n\nevent: partial_message\ndata: {"partial":{"type":"text","text":"先看"}}\n\nevent: partial_message\ndata: {"partial":{"type":"text","text":"票型"}}\n\nevent: result\ndata: {"subtype":"success","text":"先看票型"}\n\nevent: done\ndata: {}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } });
+      }
       return Response.json({ text: `${characterId}的判断`, sessionId: `runtime-${characterId}` });
     };
     for (const [index, resident] of roster.entries()) {
@@ -37,7 +42,10 @@ test("九个居民分别路由到自己的 Zerone Agent，且保留当前角色�
     const stream = await requestZeroneAgent({ sessionId: "11111111-1111-4111-8111-111111111111",
       playerId: "guest_testplayer123",
       seat: 1, characterId: "zhou", phase: "DAY_SPEECH", messages: [{ role: "user", content: "玩家公开发言：先看票型" }], stream: true });
-    assert.match(await stream.text(), /chat\.completion\.chunk/);
+    const streamText = await stream.text();
+    assert.match(streamText, /chat\.completion\.chunk/);
+    assert.equal((streamText.match(/先看/g) || []).length, 1);
+    assert.equal((streamText.match(/票型/g) || []).length, 1);
   } finally {
     globalThis.fetch = oldFetch;
     if (oldConfig === undefined) delete process.env.ZERONE_AGENTS_JSON;

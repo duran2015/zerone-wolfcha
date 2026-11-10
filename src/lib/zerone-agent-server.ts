@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { publicAgentMemory } from "@/lib/zerone-agent-memory";
+import { zeroneRunAsChatStream } from "@/lib/zerone-agent-stream";
 
 type RuntimeSeat = { name: string; url: string; apiKey: string };
 function runtimeSeats(): Record<string, RuntimeSeat> {
@@ -76,13 +77,14 @@ export async function requestZeroneAgent(input: {
   const sessionKey = `${input.sessionId}:${input.characterId}`;
   const runtimeSessionId = runtimeSessions.get(sessionKey);
   const upstream = await fetch(`${agentUrl(runtime)}/runs`, {
-    method: "POST", headers: { "x-api-key": runtime.apiKey, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ message, ...(runtimeSessionId ? { sessionId: runtimeSessionId } : {}), stream: false }),
+    method: "POST", headers: { "x-api-key": runtime.apiKey, "Content-Type": "application/json", Accept: input.stream ? "text/event-stream" : "application/json" },
+    body: JSON.stringify({ message, ...(runtimeSessionId ? { sessionId: runtimeSessionId } : {}), stream: input.stream }),
     signal: AbortSignal.timeout(180_000), cache: "no-store",
   });
   if (!upstream.ok) return new Response(JSON.stringify({ error: `Zerone Agent returned HTTP ${upstream.status}` }), {
     status: upstream.status, headers: { "Content-Type": "application/json" },
   });
+  if (input.stream) return zeroneRunAsChatStream(upstream, (sessionId) => runtimeSessions.set(sessionKey, sessionId));
   const result: unknown = await upstream.json();
   const returnedSessionId = result && typeof result === "object" ? (result as { sessionId?: unknown }).sessionId : undefined;
   if (typeof returnedSessionId === "string" && returnedSessionId) runtimeSessions.set(sessionKey, returnedSessionId);
@@ -91,10 +93,5 @@ export async function requestZeroneAgent(input: {
     status: 502, headers: { "Content-Type": "application/json" },
   });
   const id = randomUUID();
-  if (input.stream) {
-    const chunk = JSON.stringify({ id, object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: text }, finish_reason: null }] });
-    const end = JSON.stringify({ id, object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
-    return new Response(`data: ${chunk}\n\ndata: ${end}\n\ndata: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-  }
   return Response.json({ id, object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }] });
 }

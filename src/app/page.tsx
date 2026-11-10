@@ -51,6 +51,7 @@ import { TutorialOverlay, type TutorialPayload } from "@/components/game/Tutoria
 import { DevConsole, DevModeButton } from "@/components/DevTools";
 import { SettingsModal } from "@/components/game/SettingsModal";
 import { TokenPayRecoveryHost } from "@/components/game/TokenPayRecoveryHost";
+import { AiActivityPanel } from "@/components/game/AiActivityPanel";
 
 import { buildSimpleAvatarUrl, getModelLogoUrl } from "@/lib/avatar-config";
 import { audioManager, makeAudioTaskId } from "@/lib/audio-manager";
@@ -1706,6 +1707,7 @@ export default function Home() {
         isGameInProgress={gameInProgress || !!matchingRoster}
         onExitGame={restartGame}
       />
+      {gameStarted && process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" && <AiActivityPanel />}
 
       {/* 开发者模式 - 只在游戏开始后显示 */}
       {showTable && showDevTools && (
