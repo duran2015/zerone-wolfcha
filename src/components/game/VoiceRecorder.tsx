@@ -405,7 +405,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
         ) : (
           <>
             <Microphone size={14} weight="fill" />
-            {t("voiceRecorder.actions.holdToTalk")}
+            {t("voiceRecorder.actions.voiceInput")}
           </>
         )}
       </button>

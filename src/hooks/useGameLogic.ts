@@ -1470,9 +1470,11 @@ export function useGameLogic() {
       const scenario = isGenshinMode ? undefined : getRandomScenario();
       const makeId = () => generateUUID();
 
-      // 每局只随机一次真人座位；UI、阶段推进和 Prompt 都读取同一个 seat。
+      // 演示对局让真人尽早轮到发言；普通对局仍随机座位。
       // 观战模式没有人类玩家。
-      const humanSeat = isSpectatorMode ? -1 : getRandomHumanSeat(totalPlayers);
+      const humanSeat = isSpectatorMode ? -1
+        : process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" ? Math.min(1, totalPlayers - 1)
+        : getRandomHumanSeat(totalPlayers);
 
       const aiSeats = Array.from({ length: totalPlayers }, (_, seat) => seat).filter(
         (seat) => seat !== humanSeat
