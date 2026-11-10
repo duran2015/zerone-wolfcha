@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { isDemoGuest, isZeroneHubMode, requestZeroneHub } from "@/lib/zerone-hub-server";
+import { isZeroneAgentConfigured } from "@/lib/zerone-agent-server";
+import { recordPublicAgentEvent } from "@/lib/zerone-agent-memory";
 
 export async function POST(request: Request) {
   if (!isZeroneHubMode()) return NextResponse.json({ error: "Zerone Hub mode is disabled" }, { status: 404 });
@@ -9,6 +11,10 @@ export async function POST(request: Request) {
   const { sessionId, event } = input as { sessionId?: unknown; event?: unknown };
   if (typeof sessionId !== "string" || !/^[0-9a-f-]{36}$/i.test(sessionId) || !event || typeof event !== "object") {
     return NextResponse.json({ error: "Invalid event" }, { status: 400 });
+  }
+  if (isZeroneAgentConfigured()) {
+    await recordPublicAgentEvent(request.headers.get("x-guest-id") || "", sessionId, event);
+    return NextResponse.json({ ok: true });
   }
   try {
     const response = await requestZeroneHub(`/sessions/${sessionId}/events`, { method: "POST", body: JSON.stringify(event) });

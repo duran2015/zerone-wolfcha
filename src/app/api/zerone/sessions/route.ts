@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isDemoGuest, isZeroneHubMode, requestZeroneHub } from "@/lib/zerone-hub-server";
+import { isZeroneAgentConfigured, zeroneAgentSession } from "@/lib/zerone-agent-server";
 
 export async function POST(request: Request) {
   if (!isZeroneHubMode()) return NextResponse.json({ error: "Zerone Hub mode is disabled" }, { status: 404 });
@@ -11,6 +12,7 @@ export async function POST(request: Request) {
       !input.seats.every((seat) => seat && Number.isInteger(seat.seat) && typeof seat.characterId === "string")) {
     return NextResponse.json({ error: "Nine AI seats are required" }, { status: 400 });
   }
+  if (isZeroneAgentConfigured()) return NextResponse.json(zeroneAgentSession(), { status: 201 });
   try {
     const response = await requestZeroneHub("/sessions", {
       method: "POST",

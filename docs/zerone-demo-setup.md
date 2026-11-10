@@ -1,8 +1,12 @@
 # Wolfcha × Zerone 本地演示
 
-Wolfcha 的 AI 请求由服务端转发到 Zerone Hub 的 `/api/v1/game-seats`；Hub 再调用其后台已配置的模型。浏览器不接触 Hub 服务密钥或模型密钥。
+首选接法与 Beadloop 手串小程序一致：Wolfcha 服务端通过独立运行密钥调用 Zerone Agent Runtime 的 `/v1/agents/{name}/runs`。九名居民各有一个 Agent、运行地址和密钥。Wolfcha 保留狼人杀规则、阶段提示词和角色可见上下文；浏览器不接触 Agent 密钥。旧的 Hub `game-seats` 适配器仍可用于已有部署。
 
-## 1. 配置 Zerone Hub
+## 首选：九名独立 Zerone Agent
+
+在 Zerone 部署 `wolfcha-zhou`、`wolfcha-zhen`、`wolfcha-lin`、`wolfcha-chen`、`wolfcha-meimei`、`wolfcha-jie`、`wolfcha-xiaoyu`、`wolfcha-laowu`、`wolfcha-tang`。服务端 `.env.local` 使用一行 `ZERONE_AGENTS_JSON` 保存九人映射，每项包含 `name`、`url`（Runtime 根地址）和 `apiKey`（该 Agent 的独立运行密钥）。`ZERONE_DEMO_MODE`、`NEXT_PUBLIC_ZERONE_DEMO_MODE`、`ZERONE_HUB_MODE`、`NEXT_PUBLIC_ZERONE_HUB_MODE` 均设为 `1`。此路径不需要 `ZERONE_HUB_BASE_URL` 或 `ZERONE_SERVICE_KEY`。每次模型请求按座位路由到相应 Agent，并携带该角色可见的本局上下文；首次运行后复用各自的 Runtime 会话。玩家公开发言和票型写入本机 `.data/zerone-agent-public-memory.json`，后续对局作为公开事实参考。该记忆仅供本机演示，正式部署需要迁入持久数据库。
+
+## 旧路径：配置 Zerone Hub 游戏座位接口
 
 先在 Hub 后台配置一个有 Provider 和模型的 Agent。可以复用现有 Agent。Hub 服务端设置：
 

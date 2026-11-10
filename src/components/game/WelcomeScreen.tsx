@@ -865,7 +865,7 @@ export function WelcomeScreen({
     if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" && latestDemoConfig.modelReady !== true) {
       setDemoModelReady(false);
       toast.error(process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1"
-        ? "Zerone Hub 尚未就绪：请检查服务地址、密钥和九名居民，然后重新检查。"
+        ? "Zerone 的九名 AI 居民尚未就绪，请稍后重新检查。"
         : "模型尚未配置：请在 .env.local 填写 OPENAI_COMPAT_BASE_URL、OPENAI_COMPAT_API_KEY 和 OPENAI_COMPAT_MODEL，然后重启服务。");
       return;
     }
@@ -963,7 +963,7 @@ export function WelcomeScreen({
           {demoModelReady !== true && (
             <div role="status" className="mb-5 rounded-lg border border-[#9c8053] p-3 text-sm text-[#ead1a6]">
               {demoModelReady === null ? "正在检查模型配置…" : process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1"
-                ? "Zerone Hub 尚未就绪。请检查服务地址、密钥和九名居民，然后重新检查。"
+                ? "Zerone 的九名 AI 居民尚未就绪，请稍后重新检查。"
                 : "模型尚未配置。请先填写 .env.local 中的三个 OPENAI_COMPAT_* 变量并重启服务。"}
               <button type="button" className="block mt-2 underline" onClick={() => void fetchDemoModeConfigClient(true).then((snapshot) => setDemoModelReady(snapshot.modelReady === true))}>重新检查</button>
             </div>

@@ -7,6 +7,7 @@ import {
 import { ALL_MODELS, PROJECT_MODELS } from "@/types/game";
 import { randomUUID } from "node:crypto";
 import { isZeroneHubMode, requestZeroneHub } from "@/lib/zerone-hub-server";
+import { isZeroneAgentConfigured, requestZeroneAgent } from "@/lib/zerone-agent-server";
 import { applyTokenDanceResponseFormat } from "@/lib/tokendance-response-format";
 import {
   getConnectedTokenPayApiKey,
@@ -764,6 +765,8 @@ export async function POST(request: NextRequest) {
         const invoke = async (item: Record<string, unknown>) => {
           const seat = Number.isInteger(item.zeroneSeat) ? item.zeroneSeat : fallbackSeat;
           const characterId = typeof item.zeroneCharacterId === "string" ? item.zeroneCharacterId : fallbackCharacterId;
+          if (isZeroneAgentConfigured()) return requestZeroneAgent({ playerId: guestId, sessionId, seat: Number(seat), characterId, phase: typeof item.zeronePhase === "string" ? item.zeronePhase : phase,
+            messages: item.messages as unknown[], stream: item.stream === true });
           return requestZeroneHub(`/sessions/${sessionId}/generate`, {
             method: "POST",
             body: JSON.stringify({ seat, characterId, phase: typeof item.zeronePhase === "string" ? item.zeronePhase : phase,
