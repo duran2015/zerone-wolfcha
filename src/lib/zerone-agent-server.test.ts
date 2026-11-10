@@ -20,8 +20,7 @@ test("九个居民分别路由到自己的 Zerone Agent，且保留当前角色�
       seen.push(characterId);
       assert.equal(new Headers(init?.headers).get("x-api-key"), `secret-${characterId}`);
       const body = JSON.parse(String(init?.body));
-      if (seen.filter((id) => id === characterId).length === 1) assert.equal(body.sessionId, undefined);
-      else assert.equal(body.sessionId, `runtime-${characterId}`);
+      assert.equal(body.sessionId, undefined);
       assert.equal(JSON.parse(body.message).messages[0].content, "玩家公开发言：先看票型");
       if (body.stream) {
         assert.equal(new Headers(init?.headers).get("Accept"), "text/event-stream");

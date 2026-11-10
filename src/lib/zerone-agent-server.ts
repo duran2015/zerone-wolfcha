@@ -33,8 +33,6 @@ export function zeroneAgentRoster() {
 
 export function zeroneAgentSession() { return { sessionId: randomUUID() }; }
 
-const runtimeSessions = new Map<string, string>();
-
 function agentUrl(seat: RuntimeSeat): URL {
   const base = seat.url?.trim().replace(/\/$/, "");
   const agent = seat.name?.trim();
@@ -70,24 +68,25 @@ export async function requestZeroneAgent(input: {
   }
   const message = JSON.stringify({
     role: "Wolfcha 游戏角色", seat: input.seat, character: resident[1], bio: resident[2], phase: input.phase,
-    rules: "严格依据 messages 中该角色可见的上下文行动。公开发言、玩家的最新发言和票型都是证据；不能透露未公开的夜间信息。只输出原提示词要求的格式，不加解释或 Markdown。",
+    rules: "严格依据 messages 中该角色可见的上下文行动。公开发言、玩家的最新发言和票型都是证据；不能透露未公开的夜间信息。只输出原提示词要求的格式，不加解释或 Markdown。" +
+      (input.phase.includes("SPEECH") || input.phase === "DAY_LAST_WORDS"
+        ? " 发言聚焦一两条关键证据，最多三句、120 个汉字；不要逐个点评所有玩家。"
+        : ""),
     publicMemory: await publicAgentMemory(input.playerId),
     messages: input.messages,
   });
-  const sessionKey = `${input.sessionId}:${input.characterId}`;
-  const runtimeSessionId = runtimeSessions.get(sessionKey);
   const upstream = await fetch(`${agentUrl(runtime)}/runs`, {
     method: "POST", headers: { "x-api-key": runtime.apiKey, "Content-Type": "application/json", Accept: input.stream ? "text/event-stream" : "application/json" },
-    body: JSON.stringify({ message, ...(runtimeSessionId ? { sessionId: runtimeSessionId } : {}), stream: input.stream }),
+    // Wolfcha already supplies the role's visible game history in `messages`.
+    // Reusing a Runtime session would append previous full snapshots again on every turn.
+    body: JSON.stringify({ message, stream: input.stream }),
     signal: AbortSignal.timeout(180_000), cache: "no-store",
   });
   if (!upstream.ok) return new Response(JSON.stringify({ error: `Zerone Agent returned HTTP ${upstream.status}` }), {
     status: upstream.status, headers: { "Content-Type": "application/json" },
   });
-  if (input.stream) return zeroneRunAsChatStream(upstream, (sessionId) => runtimeSessions.set(sessionKey, sessionId));
+  if (input.stream) return zeroneRunAsChatStream(upstream, () => {});
   const result: unknown = await upstream.json();
-  const returnedSessionId = result && typeof result === "object" ? (result as { sessionId?: unknown }).sessionId : undefined;
-  if (typeof returnedSessionId === "string" && returnedSessionId) runtimeSessions.set(sessionKey, returnedSessionId);
   const text = result && typeof result === "object" ? (result as { text?: unknown }).text : undefined;
   if (typeof text !== "string" || !text.trim()) return new Response(JSON.stringify({ error: "Zerone Agent returned no text" }), {
     status: 502, headers: { "Content-Type": "application/json" },
