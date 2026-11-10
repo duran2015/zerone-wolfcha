@@ -426,7 +426,6 @@ export function DialogArea({
 
   // 处理跳过/继续：截断语音并进入下一句
   const handleAdvance = useCallback(() => {
-    audioManager.stopCurrent();
     onAdvanceDialogue?.();
   }, [onAdvanceDialogue]);
 
@@ -1650,6 +1649,9 @@ export function DialogArea({
                   {/* 底部信息栏 */}
                   <div className={`flex items-center justify-between mt-4 pt-3 border-t min-h-7 ${isNight ? "border-white/10" : "border-black/5"}`}> 
                     <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                      {isAiVoiceEnabled && currentDialogue?.isStreaming && !isTyping && (
+                        <span>按 Enter 播放语音；播完再按 Enter 继续</span>
+                      )}
                       {isTyping ? (
                         <>
                           <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />

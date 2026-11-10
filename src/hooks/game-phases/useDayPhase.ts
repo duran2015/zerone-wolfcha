@@ -140,14 +140,14 @@ export function useDayPhase(
       persona?.age,
       getLocale() as AppLocale,
     );
-    const ttsProvider: TtsProvider = modelSource === "tokenpay"
+    const ttsProvider: TtsProvider = process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1"
+      ? "aliyun" : modelSource === "tokenpay"
       || player.agentProfile?.modelRef?.provider === "tokendance"
       ? "tokendance"
       : "minimax";
     const collected: string[] = [];
     let displayedCount = 0;
     let displayChain = Promise.resolve();
-    let audioChain = Promise.resolve();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const appendSegment = (segment: string, index: number) => {
@@ -162,16 +162,8 @@ export function useDayPhase(
         playerId: player.playerId,
         ttsProvider,
       };
-      // 首段 TTS 等待不能让后续文字先进入队列。后续音频只预加载，不阻塞字幕。
+      // 字幕先显示；语音只预加载，用户按 Enter 后才播放。
       displayChain = displayChain.then(async () => {
-        if (!isValid()) return;
-        let firstAudioReady = false;
-        if (index === 0 && audioManager.isEnabled()) {
-          try {
-            await withTimeout(audioManager.ensureReady(task), 15000);
-            firstAudioReady = true;
-          } catch { /* 保留文字，不重发失败的 TTS 请求 */ }
-        }
         if (!isValid()) return;
         if (index === 0) {
           clearTimeout(timeoutId);
@@ -180,15 +172,7 @@ export function useDayPhase(
         appendToSpeechQueue(segment, id, index);
         displayedCount += 1;
         if (audioManager.isEnabled()) {
-          if (index === 0) {
-            if (firstAudioReady) audioManager.addToQueue(task);
-            return;
-          }
-          audioChain = audioChain.then(async () => {
-            if (!isValid()) return;
-            try { await withTimeout(audioManager.ensureReady(task), 15000); } catch { return; }
-            if (isValid()) audioManager.addToQueue(task);
-          });
+          void audioManager.ensureReady(task).catch(() => undefined);
         }
       });
     };

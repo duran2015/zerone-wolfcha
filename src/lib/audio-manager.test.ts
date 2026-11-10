@@ -42,6 +42,19 @@ test("缓存相同语音但按段落分别播放，重放同一段落只入队�
   } finally { h.restore(); }
 });
 
+test("Enter 推进前可以判断当前段语音是否仍在播放", async () => {
+  const h = await setup();
+  try {
+    h.manager.addToQueue(h.task("第一句", "speech:0"));
+    assert.equal(h.manager.isPlaybackPending("speech:0"), true);
+    await tick();
+    assert.equal(h.manager.isPlaybackPending("speech:0"), true);
+    h.audios[0].onended?.();
+    await tick();
+    assert.equal(h.manager.isPlaybackPending("speech:0"), false);
+  } finally { h.restore(); }
+});
+
 test("清队列不会先启动下一条旧语音，失效任务不播放", async () => {
   const h = await setup();
   try {

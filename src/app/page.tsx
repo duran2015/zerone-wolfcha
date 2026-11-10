@@ -674,7 +674,7 @@ export default function Home() {
       player?.agentProfile?.persona?.age,
       locale
     );
-    const taskId = makeAudioTaskId(voiceId, text);
+    const taskId = makeAudioTaskId(voiceId, text, process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1" ? "aliyun" : "minimax");
     const durationMs = audioManager.getCachedDurationMs(taskId);
     if (!durationMs || durationMs <= 0) return 25;
 
@@ -694,6 +694,25 @@ export default function Home() {
     if (completedText !== currentDialogue.text) return;
     markCurrentSegmentCompleted();
   }, [completedText, currentDialogue, markCurrentSegmentCompleted]);
+
+  const spokenDialogueRef = useRef<{ dialogue: typeof currentDialogue; playbackId: string } | null>(null);
+  const shouldWaitForVoice = useCallback(() => {
+    if (!shouldUseAiVoice || !currentDialogue?.isStreaming) return false;
+    if (currentDialogue.text.includes(t("dayPhase.organizing"))) return false;
+    if (completedText !== currentDialogue.text) return true;
+    const previous = spokenDialogueRef.current;
+    if (previous?.dialogue === currentDialogue) return audioManager.isPlaybackPending(previous.playbackId);
+    const player = gameState.players.find((entry) => entry.displayName === currentDialogue.speaker && !entry.isHuman);
+    if (!player) return false;
+    const voiceId = resolveVoiceId(player.agentProfile?.persona?.voiceId,
+      player.agentProfile?.persona?.gender, player.agentProfile?.persona?.age, getLocale() as AppLocale);
+    const ttsProvider = process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1" ? "aliyun" : "minimax";
+    const playbackId = crypto.randomUUID();
+    spokenDialogueRef.current = { dialogue: currentDialogue, playbackId };
+    audioManager.addToQueue({ id: makeAudioTaskId(voiceId, currentDialogue.text, ttsProvider),
+      playbackId, text: currentDialogue.text, voiceId, playerId: player.playerId, ttsProvider });
+    return true;
+  }, [shouldUseAiVoice, currentDialogue, completedText, gameState.players, t]);
 
   // Enter/Right key to advance AI speech or move to next round
   useEffect(() => {
@@ -721,7 +740,7 @@ export default function Home() {
         // 当AI在发言时（有currentDialogue），按键推进下一句
         if (currentDialogue) {
           e.preventDefault();
-          audioManager.stopCurrent();
+          if (shouldWaitForVoice()) return;
           if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
           Promise.resolve(advanceSpeech()).then((r) => {
             if (r?.shouldAdvanceToNextSpeaker) {
@@ -741,7 +760,7 @@ export default function Home() {
     
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentDialogue, completedText, waitingForNextRound, advanceSpeech, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, isNotebookOpen, isEventLogOpen]);
+  }, [currentDialogue, completedText, waitingForNextRound, advanceSpeech, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, isNotebookOpen, isEventLogOpen, shouldWaitForVoice]);
 
   const handleAdvanceDialogue = useCallback(async () => {
     if (isRoleRevealOpen) return;
@@ -750,6 +769,7 @@ export default function Home() {
     lastAdvanceTimeRef.current = now;
 
     if (currentDialogue) {
+      if (shouldWaitForVoice()) return;
       if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
       const r = await advanceSpeech();
       if (r?.shouldAdvanceToNextSpeaker) {
@@ -761,7 +781,7 @@ export default function Home() {
     if (waitingForNextRound) {
       await handleNextRound();
     }
-  }, [advanceSpeech, completedText, currentDialogue, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, waitingForNextRound]);
+  }, [advanceSpeech, completedText, currentDialogue, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, waitingForNextRound, shouldWaitForVoice]);
 
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const lastAutoAdvanceSignatureRef = useRef<string | null>(null);
@@ -777,6 +797,10 @@ export default function Home() {
     };
 
     if (!isAutoAdvanceDialogueEnabled) {
+      clearAutoAdvanceTimeout();
+      return;
+    }
+    if (shouldUseAiVoice) {
       clearAutoAdvanceTimeout();
       return;
     }
@@ -842,6 +866,7 @@ export default function Home() {
     }
   }, [
     currentDialogue,
+    shouldUseAiVoice,
     isTyping,
     completedText,
     gameState.currentSpeakerSeat,

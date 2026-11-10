@@ -186,6 +186,11 @@ export class AudioManager {
     this.processQueue();
   }
 
+  isPlaybackPending(playbackId: string): boolean {
+    return (this.currentTask?.playbackId ?? this.currentTask?.id) === playbackId
+      || this.queue.some((task) => (task.playbackId ?? task.id) === playbackId);
+  }
+
   stopCurrent() {
     if (this.currentAudio) {
       const url = this.currentAudio.src;
