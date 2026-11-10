@@ -57,6 +57,7 @@ import { gameSessionTracker } from "@/lib/game-session-tracker";
 import { continueAfterHunterShotWithBadgeTransfer } from "@/lib/hunter-badge-flow";
 import { isQuotaExhaustedMessage } from "@/lib/llm";
 import { aiLogger } from "@/lib/ai-logger";
+import { clearZeroneGame, isZeroneGameEnabled, loadZeroneRoster, startZeroneGame, syncZeroneGameEvents, type ZeroneResident } from "@/lib/zerone-game";
 
 // 子模块
 import { useDialogueManager, type DialogueState } from "./useDialogueManager";
@@ -98,6 +99,11 @@ export function useGameLogic() {
   });
   const [gameStarted, setGameStarted] = useState(false);
   const [gameState, setGameState] = useAtom(gameStateAtom);
+  useEffect(() => {
+    if (isZeroneGameEnabled() && gameState.players.length > 0) {
+      void syncZeroneGameEvents(gameState).catch((error) => console.error("[zerone-hub] event sync failed", error));
+    }
+  }, [gameState]);
   const [isLoading, setIsLoading] = useState(false);
   const [matchingRoster, setMatchingRoster] = useState<MatchingRoster | null>(null);
   const entryGateRef = useRef(new GameEntryGate());
@@ -1402,17 +1408,20 @@ export function useGameLogic() {
       difficulty = "normal",
       playerCount = 10,
       gameSessionId,
-      isGenshinMode = false,
-      isSpectatorMode = false,
+      isGenshinMode: requestedGenshinMode = false,
+      isSpectatorMode: requestedSpectatorMode = false,
       customCharacters = [],
       preferredRole,
     } = options ?? {};
 
-    const totalPlayers = playerCount;
+    const isGenshinMode = isZeroneGameEnabled() ? false : requestedGenshinMode;
+    const isSpectatorMode = isZeroneGameEnabled() ? false : requestedSpectatorMode;
+    const totalPlayers = isZeroneGameEnabled() ? 10 : playerCount;
     // Both human and all-AI games use the avatar entrance; model logos keep their own entry.
     const useMatchingEntrance = !isGenshinMode;
 
     flowController.current.interrupt();
+    if (isZeroneGameEnabled()) clearZeroneGame();
     const startToken = getToken();
     entryGateRef.current.cancel();
     setMatchingRoster(null);
@@ -1442,7 +1451,7 @@ export function useGameLogic() {
       };
       gameStatsTracker.start(statsConfig);
 
-      sessionId = await gameSessionTracker.start({
+      sessionId = isZeroneGameEnabled() ? null : await gameSessionTracker.start({
         playerCount,
         difficulty,
         usedCustomKey: getModelSource() !== "project",
@@ -1515,6 +1524,7 @@ export function useGameLogic() {
       }
 
       let characters: GeneratedCharacter[] = [];
+      let zeroneResidents: ZeroneResident[] = [];
       let genshinModelRefs: ModelRef[] | undefined = undefined;
       const numAiPlayers = isSpectatorMode ? totalPlayers : totalPlayers - 1;
 
@@ -1566,7 +1576,15 @@ export function useGameLogic() {
       // Use custom characters if provided, otherwise generate
       const hasCustomCharacters = customGeneratedCharacters.length > 0;
 
-      if (hasCustomCharacters) {
+      if (isZeroneGameEnabled()) {
+        zeroneResidents = (await loadZeroneRoster()).slice(0, numAiPlayers);
+        characters = zeroneResidents.map((resident) => ({
+          displayName: resident.name,
+          persona: { styleLabel: resident.bio, voiceRules: [resident.bio], mbti: "NA",
+            gender: "nonbinary", age: 30, basicInfo: resident.bio, voiceId: resident.voice || undefined },
+          avatarSeed: resident.characterId,
+        }));
+      } else if (hasCustomCharacters) {
         applyCustomCharactersToState(customGeneratedCharacters);
         // Fill remaining slots with generated characters if needed
         const remainingCount = numAiPlayers - customGeneratedCharacters.length;
@@ -1695,6 +1713,13 @@ export function useGameLogic() {
         preferredRole
       );
 
+      if (isZeroneGameEnabled()) {
+        sessionId = await startZeroneGame(humanName || "你", zeroneResidents.map((resident, index) => ({
+          seat: aiSeatOrder[index], characterId: resident.characterId,
+        })));
+        if (!isCurrentStart()) return;
+      }
+
       if (useMatchingEntrance) {
         const roster = createGameMatchingRoster(startingState.gameId, players);
         const entranceFinished = entryGateRef.current.wait(roster.roundId);
@@ -1795,7 +1820,7 @@ export function useGameLogic() {
       setMatchingRoster(null);
       setIsLoading(false);
       clearCancellableTimeouts();
-      if (sessionId) {
+      if (sessionId && !isZeroneGameEnabled()) {
         await gameSessionTracker.markFailed().catch((statusError) => {
           console.error("[game-session] Failed to mark session failed:", statusError);
         });
@@ -1849,6 +1874,7 @@ export function useGameLogic() {
 
   /** 重新开始 */
   const restartGame = useCallback(() => {
+    if (isZeroneGameEnabled()) clearZeroneGame();
     flowController.current.interrupt();
     void gameSessionTracker.abandon().catch((error) => {
       console.error("[game-session] Failed to abandon session:", error);

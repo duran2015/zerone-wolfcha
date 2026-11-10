@@ -21,6 +21,7 @@ import { GAME_SESSION_EXPIRED_CODE } from "@/lib/game-session-policy";
 import { parseLLMJson } from "./llm-json";
 import { generateUUID } from "./utils";
 import { withTimeout } from "@/lib/request-timeout";
+import { isZeroneGameEnabled, zeroneRequestContext } from "@/lib/zerone-game";
 import type { PromptScope } from "@/lib/deepseek-prompt-scope";
 import { resolveReasoning, type ReasoningProfile } from "@/lib/reasoning-profile";
 
@@ -214,6 +215,8 @@ export interface ReasoningOptions {
 
 export interface GenerateOptions {
   signal?: AbortSignal;
+  zeroneSeat?: number;
+  zeronePhase?: string;
   model: string;
   provider?: Provider;
   promptScope?: PromptScope;
@@ -716,6 +719,7 @@ export async function generateCompletion(
   };
 
   Object.assign(headers, await getAuthHeaders());
+  if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(options.zeroneSeat, options.zeronePhase).headers);
   attachGameSessionHeader(headers);
   const logicalRequestId = generateUUID();
 
@@ -829,12 +833,14 @@ async function generateCompletionBatchInternal(
   };
 
   Object.assign(headers, await getAuthHeaders());
+  if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(requests[0]?.zeroneSeat, requests[0]?.zeronePhase).headers);
   attachGameSessionHeader(headers);
   const logicalRequestId = generateUUID();
 
   const requestsWithIds = resolvedRequests.map((request) => ({
     ...request,
     request_id: generateUUID(),
+    ...(isZeroneGameEnabled() ? zeroneRequestContext(request.zeroneSeat, request.zeronePhase).body : {}),
   }));
   const response = await fetchWithRetry(
     "/api/chat",
@@ -928,6 +934,7 @@ export async function* generateCompletionStream(
   };
 
   Object.assign(headers, await getAuthHeaders());
+  if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(options.zeroneSeat, options.zeronePhase).headers);
   attachGameSessionHeader(headers);
   const logicalRequestId = generateUUID();
 

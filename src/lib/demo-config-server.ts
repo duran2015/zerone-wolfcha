@@ -1,6 +1,7 @@
 import type { DemoModePublicConfigSnapshot } from "@/lib/demo-config";
 import { ensureAdminClient, supabaseAdmin } from "@/lib/supabase-admin";
 import type { Database } from "@/types/database";
+import { isZeroneHubConfigured, isZeroneHubMode, requestZeroneHub } from "@/lib/zerone-hub-server";
 
 type DemoConfigRow = Database["public"]["Tables"]["demo_config"]["Row"];
 
@@ -83,10 +84,20 @@ async function loadDemoConfigRow() {
 export async function getDemoModeConfigServer(): Promise<DemoModePublicConfigSnapshot> {
   const now = new Date();
   if (process.env.ZERONE_DEMO_MODE === "1") {
+    let hubReady = false;
+    if (isZeroneHubMode() && isZeroneHubConfigured()) {
+      try {
+        const response = await requestZeroneHub("/roster?gameKey=wolfcha", { signal: AbortSignal.timeout(5_000) });
+        if (response.ok) {
+          const roster: unknown = await response.json();
+          hubReady = Array.isArray(roster) && roster.length >= 9;
+        }
+      } catch { /* Hub is not available yet */ }
+    }
     return {
       source: "local", enabled: true, active: true, startsAt: null, expiresAt: null,
       serverNow: now.toISOString(),
-      modelReady: Boolean(
+      modelReady: isZeroneHubMode() ? hubReady : Boolean(
         process.env.OPENAI_COMPAT_BASE_URL?.trim() &&
         process.env.OPENAI_COMPAT_API_KEY?.trim() &&
         process.env.OPENAI_COMPAT_MODEL?.trim(),
