@@ -173,6 +173,7 @@ export default function Home() {
     waitingForNextRound,
     advanceSpeech,
     markCurrentSegmentCompleted,
+    isCurrentSegmentCommitted,
     shouldAutoAdvanceToNextAI,
   } = useGameLogic();
   const { settings, setBgmVolume, setSoundEnabled, setAiVoiceEnabled, setGenshinMode, setSpectatorMode, setAutoAdvanceDialogueEnabled } = useSettings();
@@ -1536,6 +1537,7 @@ export default function Home() {
                       isAiVoiceEnabled={shouldUseAiVoice}
                       currentDialogue={currentDialogue}
                       displayedText={displayedText}
+                      currentSpeechSegmentCommitted={isCurrentSegmentCommitted()}
                       isTyping={isTyping}
                       onAdvanceDialogue={handleAdvanceDialogue}
                       isHumanTurn={(gameState.phase === "DAY_SPEECH" || gameState.phase === "DAY_LAST_WORDS" || gameState.phase === "DAY_BADGE_SPEECH" || gameState.phase === "DAY_PK_SPEECH") && gameState.currentSpeakerSeat === humanPlayer?.seat && !waitingForNextRound}

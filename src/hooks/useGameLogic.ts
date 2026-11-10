@@ -2438,6 +2438,7 @@ export function useGameLogic() {
     togglePause,
     markCurrentSegmentCompleted,
     isCurrentSegmentCompleted,
+    isCurrentSegmentCommitted,
     shouldAutoAdvanceToNextAI,
   };
 }

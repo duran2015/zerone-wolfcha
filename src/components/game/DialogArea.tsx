@@ -254,6 +254,7 @@ interface DialogAreaProps {
   isAiVoiceEnabled?: boolean;
   currentDialogue: DialogueState | null;
   displayedText: string;
+  currentSpeechSegmentCommitted?: boolean;
   isTyping: boolean;
   showFullHistory?: boolean;
   onAdvanceDialogue?: () => void;
@@ -371,6 +372,7 @@ export function DialogArea({
   isAiVoiceEnabled = false,
   currentDialogue,
   displayedText,
+  currentSpeechSegmentCommitted = false,
   isTyping,
   onAdvanceDialogue,
   onAtBottomChange,
@@ -469,6 +471,13 @@ export function DialogArea({
       (m) => !(m.isSystem && isTurnPromptSystemMessage(m.content, t))
     );
   }, [gameState.messages, t]);
+
+  const liveSpeaker = currentDialogue?.isStreaming
+    ? gameState.players.find((player) => player.displayName === currentDialogue.speaker && !player.isHuman)
+    : undefined;
+  const liveSpeech = liveSpeaker && !currentSpeechSegmentCommitted && displayedText.trim()
+    && !currentDialogue?.text.includes(t("dayPhase.organizing"))
+    ? displayedText : "";
 
   // 获取当前发言者信息
   const currentSpeaker = useMemo(() => {
@@ -1040,6 +1049,19 @@ export function DialogArea({
                         </motion.div>
                       );
                     })}
+                    {liveSpeaker && liveSpeech && (
+                      <motion.div key={`live-speech-${liveSpeaker.playerId}`} layout aria-live="polite">
+                        <ChatMessageItem
+                          msg={{ id: `live-${liveSpeaker.playerId}`, playerId: liveSpeaker.playerId,
+                            playerName: liveSpeaker.displayName, content: liveSpeech, timestamp: Date.now() }}
+                          players={gameState.players}
+                          humanPlayerId={humanPlayer?.playerId}
+                          showDivider={visibleMessages.at(-1)?.playerId !== liveSpeaker.playerId}
+                          isNight={isNight}
+                          isGenshinMode={isGenshinMode}
+                        />
+                      </motion.div>
+                    )}
                   </AnimatePresence>
                 </LayoutGroup>
               </div>
