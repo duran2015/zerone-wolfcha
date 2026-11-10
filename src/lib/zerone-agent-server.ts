@@ -63,6 +63,7 @@ export async function isZeroneAgentReady(): Promise<boolean> {
 
 export async function requestZeroneAgent(input: {
   playerId: string; sessionId: string; seat: number; characterId: string; phase: string; messages: unknown[]; stream: boolean;
+  signal?: AbortSignal;
 }): Promise<Response> {
   const resident = residents.find(([id]) => id === input.characterId);
   const runtime = runtimeSeats()[input.characterId];
@@ -84,7 +85,9 @@ export async function requestZeroneAgent(input: {
     // Wolfcha already supplies the role's visible game history in `messages`.
     // Reusing a Runtime session would append previous full snapshots again on every turn.
     body: JSON.stringify({ message, stream: input.stream }),
-    signal: AbortSignal.timeout(180_000), cache: "no-store",
+    // Cancel Runtime generation when the browser abandons a prefetch or times out.
+    signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
+    cache: "no-store",
   });
   if (!upstream.ok) return new Response(JSON.stringify({ error: `Zerone Agent returned HTTP ${upstream.status}` }), {
     status: upstream.status, headers: { "Content-Type": "application/json" },

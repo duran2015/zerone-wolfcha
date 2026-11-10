@@ -77,14 +77,16 @@ export function useDayPhase(
   const store = useStore();
   const activeRequestRef = useRef<(SpeechRequest & { controller: AbortController }) | null>(null);
   const prefetchControllerRef = useRef<AbortController | null>(null);
+  const pendingPrefetchRef = useRef<{ criteria: PrefetchCriteria; controller: AbortController; promise: Promise<string[]> } | null>(null);
   const failedRequestRef = useRef<SpeechRequest | null>(null);
   const isSpeechBlocked = useCallback(() => failedRequestRef.current?.isValid() === true, []);
 
   useEffect(() => {
     if (activeRequestRef.current && !activeRequestRef.current.isValid()) {
       activeRequestRef.current.controller.abort();
-      prefetchControllerRef.current?.abort();
     }
+    const pending = pendingPrefetchRef.current;
+    if (pending && (pending.criteria.gameId !== gameState.gameId || pending.criteria.phase !== gameState.phase)) pending.controller.abort();
   }, [gameState]);
   useEffect(() => () => {
     activeRequestRef.current?.controller.abort();
@@ -105,12 +107,20 @@ export function useDayPhase(
       playerId: player.playerId, phase: state.phase, day: state.day,
       messageCount: state.messages.length, segments: [], isComplete: false, createdAt: Date.now(),
     };
+    const criteria: PrefetchCriteria = {
+      gameId: base.gameId, contextKey: base.contextKey, playerId: base.playerId,
+      phase: base.phase, day: base.day, messageCount: base.messageCount,
+    };
     setPrefetchedSpeech(base);
+    const promise = generateAISpeechSegmentsStream(state, player, { signal: controller.signal });
+    pendingPrefetchRef.current = { criteria, controller, promise };
     try {
-      const segments = await generateAISpeechSegmentsStream(state, player, { signal: controller.signal });
+      const segments = await promise;
       if (isValid()) setPrefetchedSpeech({ ...base, segments, isComplete: true });
     } catch {
       if (isValid()) setPrefetchedSpeech(null);
+    } finally {
+      if (pendingPrefetchRef.current?.controller === controller) pendingPrefetchRef.current = null;
     }
   }, [getToken, setPrefetchedSpeech, store]);
 
@@ -177,11 +187,17 @@ export function useDayPhase(
       });
     };
 
-    const prefetched = consumePrefetchedSpeech({
+    const criteria: PrefetchCriteria = {
       gameId: state.gameId, contextKey: getSpeechContextKey(state, player),
       playerId: player.playerId, phase: state.phase, day: state.day, messageCount: state.messages.length,
-    });
-    prefetchControllerRef.current?.abort();
+    };
+    const prefetched = consumePrefetchedSpeech(criteria);
+    const pending = pendingPrefetchRef.current;
+    const matchingPending = pending && !pending.controller.signal.aborted &&
+      Object.entries(criteria).every(([key, value]) => pending.criteria[key as keyof PrefetchCriteria] === value)
+      ? pending : null;
+    if (!matchingPending) prefetchControllerRef.current?.abort();
+    else controller.signal.addEventListener("abort", () => matchingPending.controller.abort(), { once: true });
     initStreamingSpeechQueue(player, afterSpeech, request);
     setIsWaitingForAI(true);
     setDialogue(player.displayName, t("dayPhase.organizing"), true);
@@ -201,6 +217,8 @@ export function useDayPhase(
     try {
       const streamPromise = prefetched
         ? Promise.resolve(prefetched.forEach(appendSegment))
+        : matchingPending
+          ? matchingPending.promise.then((segments) => segments.forEach(appendSegment))
         : generateAISpeechSegmentsStream(state, player, { signal: controller.signal, onSegmentReceived: appendSegment });
       const result = await Promise.race([streamPromise, timeoutPromise]);
       if (result === "timeout" || !isValid()) return;

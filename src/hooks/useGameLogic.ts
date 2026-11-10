@@ -799,6 +799,22 @@ export function useGameLogic() {
   }, [badgePhase, runDaySpeechAction]);
   startDayPhaseInternalRef.current = startDayPhaseInternal;
 
+  // Night resolution normally enters badge signup after the dawn narration.
+  // If that async continuation loses its flow token, the persisted DAY_START
+  // would otherwise leave the table with no action until the player reloads.
+  useEffect(() => {
+    if (gameState.phase !== "DAY_START") return;
+    const gameId = gameState.gameId;
+    const timer = window.setTimeout(() => {
+      const current = gameStateRef.current;
+      if (current.gameId !== gameId || current.phase !== "DAY_START" || current.isPaused || isAwaitingRoleRevealRef.current) return;
+      console.warn("[wolfcha] Recovering stalled DAY_START");
+      const start = startDayPhaseInternalRef.current;
+      if (start) void start(current, getToken()).catch((error) => console.error("[wolfcha] DAY_START recovery failed", error));
+    }, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [gameState.phase, gameState.gameId, getToken]);
+
   const proceedToNight = useCallback(async (state: GameState, token: ReturnType<typeof getToken>) => {
     if (!isTokenValid(token)) return;
     if (isAwaitingRoleRevealRef.current) return;

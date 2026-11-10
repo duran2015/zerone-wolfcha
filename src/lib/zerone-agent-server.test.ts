@@ -60,3 +60,24 @@ test("九个居民分别路由到自己的 Zerone Agent，且保留当前角色�
     else process.env.ZERONE_AGENTS_JSON = oldConfig;
   }
 });
+
+test("取消浏览器请求会同步取消 Zerone Runtime 请求", async () => {
+  const original = process.env.ZERONE_AGENTS_JSON;
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  try {
+    process.env.ZERONE_AGENTS_JSON = JSON.stringify({ zhou: { name: "wolfcha-zhou", url: "https://agents.example.test", apiKey: "secret" } });
+    globalThis.fetch = async (_url, init) => {
+      assert.equal(init?.signal?.aborted, false);
+      controller.abort();
+      assert.equal(init?.signal?.aborted, true);
+      throw new DOMException("cancelled", "AbortError");
+    };
+    await assert.rejects(requestZeroneAgent({ playerId: "guest_testplayer123", sessionId: "test", seat: 1,
+      characterId: "zhou", phase: "DAY_SPEECH", messages: [], stream: true, signal: controller.signal }), /cancelled/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (original === undefined) delete process.env.ZERONE_AGENTS_JSON;
+    else process.env.ZERONE_AGENTS_JSON = original;
+  }
+});
