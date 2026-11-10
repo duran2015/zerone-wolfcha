@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isZeroneAgentConfigured, requestZeroneAgent, zeroneAgentRoster } from "./zerone-agent-server";
+import { zeroneResidentMind } from "./zerone-resident-minds";
+
+test("九位 Zerone 居民有各自稳定的记忆和推理风格", () => {
+  const minds = zeroneAgentRoster().map(({ characterId }) => zeroneResidentMind(characterId));
+  assert.equal(minds.length, 9);
+  assert.ok(minds.every((mind) => mind?.memoryBias && mind.logicDepth && mind.suspicionThreshold));
+  assert.equal(new Set(minds.map((mind) => mind?.memoryBias)).size, 9);
+});
 
 test("九个居民分别路由到自己的 Zerone Agent，且保留当前角色上下文", async () => {
   const oldConfig = process.env.ZERONE_AGENTS_JSON;

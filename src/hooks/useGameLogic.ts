@@ -39,6 +39,7 @@ import {
   generateWhiteWolfKingBoomDecision,
 } from "@/lib/game-master";
 import { buildGenshinModelRefs, generateCharacters, generateGenshinModeCharacters, sampleModelRefs, type GeneratedCharacter } from "@/lib/character-generator";
+import { zeroneResidentMind } from "@/lib/zerone-resident-minds";
 import { getSystemMessages, getUiText } from "@/lib/game-texts";
 import { getRandomScenario } from "@/lib/scenarios";
 import { DELAY_CONFIG, getRoleName } from "@/lib/game-constants";
@@ -1584,6 +1585,7 @@ export function useGameLogic() {
           displayName: resident.name,
           persona: { styleLabel: resident.bio, voiceRules: [resident.bio], mbti: "NA",
             gender: "nonbinary", age: 30, basicInfo: resident.bio, voiceId: resident.voice || undefined },
+          playerMind: zeroneResidentMind(resident.characterId),
           avatarSeed: resident.characterId,
         }));
       } else if (hasCustomCharacters) {

@@ -7,6 +7,7 @@ import { getSystemMessages, getSystemPatterns } from "./game-texts";
 import { getI18n } from "@/i18n/translator";
 import { getRoleName } from "./game-constants";
 import { getRoleConfiguration } from "./role-configuration";
+import { zeroneResidentMind } from "./zerone-resident-minds";
 import {
   resolveBadgeElectionWinner,
   resolveSheriffSeatAtVote,
@@ -296,7 +297,9 @@ ${lines.join("\n")}
 }
 
 const buildHiddenPlayerMindSection = (player: Player, locale: string): string => {
-  const mind = player.agentProfile?.playerMind;
+  // Restored demo games predate the resident mind profiles.
+  const mind = player.agentProfile?.playerMind ??
+    (player.avatarSeed ? zeroneResidentMind(player.avatarSeed) : undefined);
   if (!mind) return "";
 
   if (locale === "zh") {
