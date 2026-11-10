@@ -1,12 +1,13 @@
 import { fetchWithTimeout } from "@/lib/request-timeout";
 
 export type DemoModePublicConfigSnapshot = {
-  source: "database";
+  source: "database" | "local";
   enabled: boolean;
   active: boolean;
   startsAt: string | null;
   expiresAt: string | null;
   serverNow: string;
+  modelReady?: boolean;
 };
 
 const DEMO_CONFIG_ENDPOINT = "/api/demo-config";
@@ -58,7 +59,7 @@ export async function fetchDemoModeConfigClient(forceRefresh = false): Promise<D
 
       const payload = (await response.json()) as Partial<DemoModePublicConfigSnapshot>;
       const snapshot: DemoModePublicConfigSnapshot = {
-        source: "database",
+        source: payload.source === "local" ? "local" : "database",
         enabled: payload.enabled === true,
         active: payload.active === true,
         startsAt: typeof payload.startsAt === "string" ? payload.startsAt : null,
@@ -67,6 +68,7 @@ export async function fetchDemoModeConfigClient(forceRefresh = false): Promise<D
           typeof payload.serverNow === "string"
             ? payload.serverNow
             : new Date().toISOString(),
+        modelReady: payload.modelReady === true,
       };
 
       setCachedDemoModeConfig(snapshot);

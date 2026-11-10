@@ -57,6 +57,7 @@ import { gameSessionTracker } from "@/lib/game-session-tracker";
 import { continueAfterHunterShotWithBadgeTransfer } from "@/lib/hunter-badge-flow";
 import { isQuotaExhaustedMessage } from "@/lib/llm";
 import { aiLogger } from "@/lib/ai-logger";
+import { clearZeroneGame, isZeroneGameEnabled, loadZeroneRoster, startZeroneGame, syncZeroneGameEvents, type ZeroneResident } from "@/lib/zerone-game";
 
 // 子模块
 import { useDialogueManager, type DialogueState } from "./useDialogueManager";
@@ -98,6 +99,11 @@ export function useGameLogic() {
   });
   const [gameStarted, setGameStarted] = useState(false);
   const [gameState, setGameState] = useAtom(gameStateAtom);
+  useEffect(() => {
+    if (isZeroneGameEnabled() && gameState.players.length > 0) {
+      void syncZeroneGameEvents(gameState).catch((error) => console.error("[zerone-hub] event sync failed", error));
+    }
+  }, [gameState]);
   const [isLoading, setIsLoading] = useState(false);
   const [matchingRoster, setMatchingRoster] = useState<MatchingRoster | null>(null);
   const entryGateRef = useRef(new GameEntryGate());
@@ -1402,17 +1408,20 @@ export function useGameLogic() {
       difficulty = "normal",
       playerCount = 10,
       gameSessionId,
-      isGenshinMode = false,
-      isSpectatorMode = false,
+      isGenshinMode: requestedGenshinMode = false,
+      isSpectatorMode: requestedSpectatorMode = false,
       customCharacters = [],
       preferredRole,
     } = options ?? {};
 
-    const totalPlayers = playerCount;
+    const isGenshinMode = isZeroneGameEnabled() ? false : requestedGenshinMode;
+    const isSpectatorMode = isZeroneGameEnabled() ? false : requestedSpectatorMode;
+    const totalPlayers = isZeroneGameEnabled() ? 10 : playerCount;
     // Both human and all-AI games use the avatar entrance; model logos keep their own entry.
     const useMatchingEntrance = !isGenshinMode;
 
     flowController.current.interrupt();
+    if (isZeroneGameEnabled()) clearZeroneGame();
     const startToken = getToken();
     entryGateRef.current.cancel();
     setMatchingRoster(null);
@@ -1442,7 +1451,7 @@ export function useGameLogic() {
       };
       gameStatsTracker.start(statsConfig);
 
-      sessionId = await gameSessionTracker.start({
+      sessionId = isZeroneGameEnabled() ? null : await gameSessionTracker.start({
         playerCount,
         difficulty,
         usedCustomKey: getModelSource() !== "project",
@@ -1461,9 +1470,11 @@ export function useGameLogic() {
       const scenario = isGenshinMode ? undefined : getRandomScenario();
       const makeId = () => generateUUID();
 
-      // 每局只随机一次真人座位；UI、阶段推进和 Prompt 都读取同一个 seat。
+      // 演示对局让真人尽早轮到发言；普通对局仍随机座位。
       // 观战模式没有人类玩家。
-      const humanSeat = isSpectatorMode ? -1 : getRandomHumanSeat(totalPlayers);
+      const humanSeat = isSpectatorMode ? -1
+        : process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" ? Math.min(1, totalPlayers - 1)
+        : getRandomHumanSeat(totalPlayers);
 
       const aiSeats = Array.from({ length: totalPlayers }, (_, seat) => seat).filter(
         (seat) => seat !== humanSeat
@@ -1515,6 +1526,7 @@ export function useGameLogic() {
       }
 
       let characters: GeneratedCharacter[] = [];
+      let zeroneResidents: ZeroneResident[] = [];
       let genshinModelRefs: ModelRef[] | undefined = undefined;
       const numAiPlayers = isSpectatorMode ? totalPlayers : totalPlayers - 1;
 
@@ -1566,7 +1578,15 @@ export function useGameLogic() {
       // Use custom characters if provided, otherwise generate
       const hasCustomCharacters = customGeneratedCharacters.length > 0;
 
-      if (hasCustomCharacters) {
+      if (isZeroneGameEnabled()) {
+        zeroneResidents = (await loadZeroneRoster()).slice(0, numAiPlayers);
+        characters = zeroneResidents.map((resident) => ({
+          displayName: resident.name,
+          persona: { styleLabel: resident.bio, voiceRules: [resident.bio], mbti: "NA",
+            gender: "nonbinary", age: 30, basicInfo: resident.bio, voiceId: resident.voice || undefined },
+          avatarSeed: resident.characterId,
+        }));
+      } else if (hasCustomCharacters) {
         applyCustomCharactersToState(customGeneratedCharacters);
         // Fill remaining slots with generated characters if needed
         const remainingCount = numAiPlayers - customGeneratedCharacters.length;
@@ -1695,6 +1715,13 @@ export function useGameLogic() {
         preferredRole
       );
 
+      if (isZeroneGameEnabled()) {
+        sessionId = await startZeroneGame(humanName || "你", zeroneResidents.map((resident, index) => ({
+          seat: aiSeatOrder[index], characterId: resident.characterId,
+        })));
+        if (!isCurrentStart()) return;
+      }
+
       if (useMatchingEntrance) {
         const roster = createGameMatchingRoster(startingState.gameId, players);
         const entranceFinished = entryGateRef.current.wait(roster.roundId);
@@ -1795,7 +1822,7 @@ export function useGameLogic() {
       setMatchingRoster(null);
       setIsLoading(false);
       clearCancellableTimeouts();
-      if (sessionId) {
+      if (sessionId && !isZeroneGameEnabled()) {
         await gameSessionTracker.markFailed().catch((statusError) => {
           console.error("[game-session] Failed to mark session failed:", statusError);
         });
@@ -1849,6 +1876,7 @@ export function useGameLogic() {
 
   /** 重新开始 */
   const restartGame = useCallback(() => {
+    if (isZeroneGameEnabled()) clearZeroneGame();
     flowController.current.interrupt();
     void gameSessionTracker.abandon().catch((error) => {
       console.error("[game-session] Failed to abandon session:", error);
@@ -2290,6 +2318,15 @@ export function useGameLogic() {
 
     const queue = getSpeechQueue();
     if (!queue || (queue.request && !queue.request.isValid())) {
+      const liveState = gameStateRef.current;
+      const speaker = liveState.players.find((player) => player.seat === liveState.currentSpeakerSeat);
+      // 热更新或刷新可能丢掉内存队列，但已显示的 AI 发言仍应能继续到下一位。
+      if (currentDialogue && !isWaitingForAI && speaker?.displayName === currentDialogue.speaker &&
+          ["DAY_SPEECH", "DAY_LAST_WORDS", "DAY_BADGE_SPEECH", "DAY_PK_SPEECH"].includes(liveState.phase)) {
+        clearSpeechQueue();
+        clearDialogue();
+        return { finished: true, shouldAdvanceToNextSpeaker: true, shouldAutoAdvanceToNextAI: false };
+      }
       return { finished: false, shouldAdvanceToNextSpeaker: false, shouldAutoAdvanceToNextAI: false };
     }
 
@@ -2354,7 +2391,7 @@ export function useGameLogic() {
     // 不设置 waitingForNextRound，直接返回 shouldAdvanceToNextSpeaker: true
     // 让调用方立即调用 handleNextRound，避免单条消息时需要按两次回车的问题
     return { finished: true, shouldAdvanceToNextSpeaker: true, shouldAutoAdvanceToNextAI: false };
-  }, [clearDialogue, clearSpeechQueue, isSpeechBlocked, buildRawDayTranscript, maybeGenerateDailySummary, setIsWaitingForAI, setWaitingForNextRound, getSpeechQueue, advanceSpeechQueue, setGameState, isCurrentSegmentCommitted, markCurrentSegmentCommitted, isCurrentSegmentCompleted]);
+  }, [clearDialogue, clearSpeechQueue, currentDialogue, isWaitingForAI, isSpeechBlocked, buildRawDayTranscript, maybeGenerateDailySummary, setIsWaitingForAI, setWaitingForNextRound, getSpeechQueue, advanceSpeechQueue, setGameState, isCurrentSegmentCommitted, markCurrentSegmentCommitted, isCurrentSegmentCompleted]);
 
   /** 切换暂停 */
   const togglePause = useCallback(() => {
@@ -2403,6 +2440,7 @@ export function useGameLogic() {
     togglePause,
     markCurrentSegmentCompleted,
     isCurrentSegmentCompleted,
+    isCurrentSegmentCommitted,
     shouldAutoAdvanceToNextAI,
   };
 }

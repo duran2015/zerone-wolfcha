@@ -8,6 +8,11 @@ export async function authenticateRequest(request: Request): Promise<
   | { user: { id: string } }
   | { error: NextResponse }
 > {
+  if (process.env.ZERONE_DEMO_MODE === "1") {
+    const guestId = request.headers.get("x-guest-id");
+    if (guestId && isGuestUser(guestId)) return { user: { id: guestId } };
+    return { error: NextResponse.json({ error: "Demo guest ID required" }, { status: 401 }) };
+  }
   try {
     ensureAdminClient();
   } catch (error) {
@@ -45,6 +50,7 @@ export async function authenticateRequest(request: Request): Promise<
 }
 
 export async function requireCredits(userId: string): Promise<boolean> {
+  if (process.env.ZERONE_DEMO_MODE === "1") return true;
   if (await isDemoModeActiveServer()) return true;
 
   try {
@@ -64,6 +70,7 @@ export async function requireCredits(userId: string): Promise<boolean> {
 }
 
 export async function hasAuthorizedActiveGameSession(userId: string, sessionId?: string | null): Promise<boolean> {
+  if (process.env.ZERONE_DEMO_MODE === "1") return true;
   if (await isDemoModeActiveServer()) return true;
   if (!sessionId) return false;
 

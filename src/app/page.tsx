@@ -51,6 +51,7 @@ import { TutorialOverlay, type TutorialPayload } from "@/components/game/Tutoria
 import { DevConsole, DevModeButton } from "@/components/DevTools";
 import { SettingsModal } from "@/components/game/SettingsModal";
 import { TokenPayRecoveryHost } from "@/components/game/TokenPayRecoveryHost";
+import { AiActivityPanel } from "@/components/game/AiActivityPanel";
 
 import { buildSimpleAvatarUrl, getModelLogoUrl } from "@/lib/avatar-config";
 import { audioManager, makeAudioTaskId } from "@/lib/audio-manager";
@@ -172,6 +173,7 @@ export default function Home() {
     waitingForNextRound,
     advanceSpeech,
     markCurrentSegmentCompleted,
+    isCurrentSegmentCommitted,
     shouldAutoAdvanceToNextAI,
   } = useGameLogic();
   const { settings, setBgmVolume, setSoundEnabled, setAiVoiceEnabled, setGenshinMode, setSpectatorMode, setAutoAdvanceDialogueEnabled } = useSettings();
@@ -672,7 +674,7 @@ export default function Home() {
       player?.agentProfile?.persona?.age,
       locale
     );
-    const taskId = makeAudioTaskId(voiceId, text);
+    const taskId = makeAudioTaskId(voiceId, text, process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1" ? "aliyun" : "minimax");
     const durationMs = audioManager.getCachedDurationMs(taskId);
     if (!durationMs || durationMs <= 0) return 25;
 
@@ -693,6 +695,25 @@ export default function Home() {
     markCurrentSegmentCompleted();
   }, [completedText, currentDialogue, markCurrentSegmentCompleted]);
 
+  const spokenDialogueRef = useRef<{ dialogue: typeof currentDialogue; playbackId: string } | null>(null);
+  const shouldWaitForVoice = useCallback(() => {
+    if (!shouldUseAiVoice || !currentDialogue?.isStreaming) return false;
+    if (currentDialogue.text.includes(t("dayPhase.organizing"))) return false;
+    if (completedText !== currentDialogue.text) return true;
+    const previous = spokenDialogueRef.current;
+    if (previous?.dialogue === currentDialogue) return audioManager.isPlaybackPending(previous.playbackId);
+    const player = gameState.players.find((entry) => entry.displayName === currentDialogue.speaker && !entry.isHuman);
+    if (!player) return false;
+    const voiceId = resolveVoiceId(player.agentProfile?.persona?.voiceId,
+      player.agentProfile?.persona?.gender, player.agentProfile?.persona?.age, getLocale() as AppLocale);
+    const ttsProvider = process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1" ? "aliyun" : "minimax";
+    const playbackId = crypto.randomUUID();
+    spokenDialogueRef.current = { dialogue: currentDialogue, playbackId };
+    audioManager.addToQueue({ id: makeAudioTaskId(voiceId, currentDialogue.text, ttsProvider),
+      playbackId, text: currentDialogue.text, voiceId, playerId: player.playerId, ttsProvider });
+    return true;
+  }, [shouldUseAiVoice, currentDialogue, completedText, gameState.players, t]);
+
   // Enter/Right key to advance AI speech or move to next round
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -711,15 +732,16 @@ export default function Home() {
       // 如果焦点在输入元素内，不拦截左右方向键（让光标正常移动）
       if (isInInput && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
-      // 如果焦点在输入元素内，不拦截 Enter 键（让输入框正常处理）
-      if (isInInput && e.key === "Enter") return;
+      // AI 发言已显示时，旧的玩家输入框可能仍保留焦点；此时 Enter 应继续对话。
+      if (isInInput && e.key === "Enter" && (!currentDialogue || activeEl?.closest("[role='dialog']"))) return;
 
       // Enter or Right arrow to advance
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "ArrowRight") {
         // 当AI在发言时（有currentDialogue），按键推进下一句
         if (currentDialogue) {
           e.preventDefault();
-          audioManager.stopCurrent();
+          if (shouldWaitForVoice()) return;
+          if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
           Promise.resolve(advanceSpeech()).then((r) => {
             if (r?.shouldAdvanceToNextSpeaker) {
               handleNextRound();
@@ -738,7 +760,7 @@ export default function Home() {
     
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentDialogue, waitingForNextRound, advanceSpeech, handleNextRound, isRoleRevealOpen, isNotebookOpen, isEventLogOpen]);
+  }, [currentDialogue, completedText, waitingForNextRound, advanceSpeech, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, isNotebookOpen, isEventLogOpen, shouldWaitForVoice]);
 
   const handleAdvanceDialogue = useCallback(async () => {
     if (isRoleRevealOpen) return;
@@ -747,6 +769,8 @@ export default function Home() {
     lastAdvanceTimeRef.current = now;
 
     if (currentDialogue) {
+      if (shouldWaitForVoice()) return;
+      if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
       const r = await advanceSpeech();
       if (r?.shouldAdvanceToNextSpeaker) {
         await handleNextRound();
@@ -757,7 +781,7 @@ export default function Home() {
     if (waitingForNextRound) {
       await handleNextRound();
     }
-  }, [advanceSpeech, currentDialogue, handleNextRound, isRoleRevealOpen, waitingForNextRound]);
+  }, [advanceSpeech, completedText, currentDialogue, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, waitingForNextRound, shouldWaitForVoice]);
 
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const lastAutoAdvanceSignatureRef = useRef<string | null>(null);
@@ -773,6 +797,10 @@ export default function Home() {
     };
 
     if (!isAutoAdvanceDialogueEnabled) {
+      clearAutoAdvanceTimeout();
+      return;
+    }
+    if (shouldUseAiVoice) {
       clearAutoAdvanceTimeout();
       return;
     }
@@ -838,6 +866,7 @@ export default function Home() {
     }
   }, [
     currentDialogue,
+    shouldUseAiVoice,
     isTyping,
     completedText,
     gameState.currentSpeakerSeat,
@@ -1257,7 +1286,12 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-transparent">
-      <TokenPayRecoveryHost />
+      {process.env.NEXT_PUBLIC_ZERONE_MOCK_MODE === "1" && (
+        <div className="fixed right-4 top-4 z-[9999] rounded-full border border-amber-500/70 bg-[#25221d] px-3 py-1 text-xs text-amber-200 shadow-lg">
+          模拟 Zerone Hub · 仅供流程演示
+        </div>
+      )}
+      {process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE !== "1" && <TokenPayRecoveryHost />}
       <GameBackground isNight={visualIsNight} isBlinking={!!dayNightBlinkPhase} />
 
       <motion.div
@@ -1308,7 +1342,7 @@ export default function Home() {
               humanName={humanName}
               setHumanName={setHumanName}
               onStart={(options) => {
-                setAiVoiceEnabled(false);
+                setAiVoiceEnabled(process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1");
                 return startGame({ ...(options ?? {}), isGenshinMode, isSpectatorMode });
               }}
               onAbort={restartGame}
@@ -1528,6 +1562,7 @@ export default function Home() {
                       isAiVoiceEnabled={shouldUseAiVoice}
                       currentDialogue={currentDialogue}
                       displayedText={displayedText}
+                      currentSpeechSegmentCommitted={isCurrentSegmentCommitted()}
                       isTyping={isTyping}
                       onAdvanceDialogue={handleAdvanceDialogue}
                       isHumanTurn={(gameState.phase === "DAY_SPEECH" || gameState.phase === "DAY_LAST_WORDS" || gameState.phase === "DAY_BADGE_SPEECH" || gameState.phase === "DAY_PK_SPEECH") && gameState.currentSpeakerSeat === humanPlayer?.seat && !waitingForNextRound}
@@ -1699,6 +1734,7 @@ export default function Home() {
         isGameInProgress={gameInProgress || !!matchingRoster}
         onExitGame={restartGame}
       />
+      {gameStarted && process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" && <AiActivityPanel />}
 
       {/* 开发者模式 - 只在游戏开始后显示 */}
       {showTable && showDevTools && (

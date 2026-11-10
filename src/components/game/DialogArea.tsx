@@ -254,6 +254,7 @@ interface DialogAreaProps {
   isAiVoiceEnabled?: boolean;
   currentDialogue: DialogueState | null;
   displayedText: string;
+  currentSpeechSegmentCommitted?: boolean;
   isTyping: boolean;
   showFullHistory?: boolean;
   onAdvanceDialogue?: () => void;
@@ -371,6 +372,7 @@ export function DialogArea({
   isAiVoiceEnabled = false,
   currentDialogue,
   displayedText,
+  currentSpeechSegmentCommitted = false,
   isTyping,
   onAdvanceDialogue,
   onAtBottomChange,
@@ -424,7 +426,6 @@ export function DialogArea({
 
   // 处理跳过/继续：截断语音并进入下一句
   const handleAdvance = useCallback(() => {
-    audioManager.stopCurrent();
     onAdvanceDialogue?.();
   }, [onAdvanceDialogue]);
 
@@ -469,6 +470,13 @@ export function DialogArea({
       (m) => !(m.isSystem && isTurnPromptSystemMessage(m.content, t))
     );
   }, [gameState.messages, t]);
+
+  const liveSpeaker = currentDialogue?.isStreaming
+    ? gameState.players.find((player) => player.displayName === currentDialogue.speaker && !player.isHuman)
+    : undefined;
+  const liveSpeech = liveSpeaker && !currentSpeechSegmentCommitted && displayedText.trim()
+    && !currentDialogue?.text.includes(t("dayPhase.organizing"))
+    ? displayedText : "";
 
   // 获取当前发言者信息
   const currentSpeaker = useMemo(() => {
@@ -1040,6 +1048,19 @@ export function DialogArea({
                         </motion.div>
                       );
                     })}
+                    {liveSpeaker && liveSpeech && (
+                      <motion.div key={`live-speech-${liveSpeaker.playerId}`} layout aria-live="polite">
+                        <ChatMessageItem
+                          msg={{ id: `live-${liveSpeaker.playerId}`, playerId: liveSpeaker.playerId,
+                            playerName: liveSpeaker.displayName, content: liveSpeech, timestamp: Date.now() }}
+                          players={gameState.players}
+                          humanPlayerId={humanPlayer?.playerId}
+                          showDivider={visibleMessages.at(-1)?.playerId !== liveSpeaker.playerId}
+                          isNight={isNight}
+                          isGenshinMode={isGenshinMode}
+                        />
+                      </motion.div>
+                    )}
                   </AnimatePresence>
                 </LayoutGroup>
               </div>
@@ -1628,6 +1649,9 @@ export function DialogArea({
                   {/* 底部信息栏 */}
                   <div className={`flex items-center justify-between mt-4 pt-3 border-t min-h-7 ${isNight ? "border-white/10" : "border-black/5"}`}> 
                     <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                      {isAiVoiceEnabled && currentDialogue?.isStreaming && !isTyping && (
+                        <span>按 Enter 播放语音；播完再按 Enter 继续</span>
+                      )}
                       {isTyping ? (
                         <>
                           <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />

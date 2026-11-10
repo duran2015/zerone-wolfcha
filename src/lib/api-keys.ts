@@ -36,6 +36,7 @@ export function resolveAiVoiceAvailability(
 }
 
 export function isAiVoiceAvailable(): boolean {
+  if (process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1") return true;
   return resolveAiVoiceAvailability(getModelSource(), hasMinimaxKey(), hasTokendanceKey());
 }
 

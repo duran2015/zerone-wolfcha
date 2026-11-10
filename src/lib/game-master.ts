@@ -734,6 +734,8 @@ export async function* generateAISpeechStream(
       model: player.agentProfile!.modelRef.model,
       messages,
       promptScope: "gameplay",
+      zeroneSeat: player.seat,
+      zeronePhase: state.phase,
       temperature: GAME_TEMPERATURE.SPEECH,
     }))) {
       fullResponse += chunk;
@@ -809,6 +811,8 @@ export async function generateAISpeechSegments(
       model: player.agentProfile!.modelRef.model,
       messages,
       promptScope: "gameplay",
+      zeroneSeat: player.seat,
+      zeronePhase: state.phase,
       temperature: GAME_TEMPERATURE.SPEECH,
     }));
 
@@ -887,6 +891,7 @@ async function recoverPublicSpeech(
   const result = await generateCompletion(mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
     model: player.agentProfile!.modelRef.model, messages: recoveryMessages,
     promptScope: "gameplay", temperature: GAME_TEMPERATURE.ACTION, signal,
+    zeroneSeat: player.seat, zeronePhase: state.phase,
     response_format: structuredResponseFormat(player.agentProfile!.modelRef, "public_speech", {
       type: "object", properties: { segments: { type: "array", items: { type: "string" }, minItems: 1 } },
       required: ["segments"], additionalProperties: false,
@@ -947,6 +952,7 @@ export async function generateAISpeechSegmentsStream(
   let accumulatedContent = "";
   try {
     const stream = generateCompletionStream(mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+      zeroneSeat: player.seat, zeronePhase: state.phase,
       model: player.agentProfile!.modelRef.model,
       messages,
       promptScope: "gameplay",
@@ -1080,6 +1086,7 @@ export async function generateAIVote(
 
     const completion = await generateCompletionAndParse(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1279,11 +1286,29 @@ async function generateCompletionAndParse<T>(
  * 使用 SUMMARY_MODEL 批量判断玩家是否上警。
  * 每个 request 都是对应玩家独立的 DAY_BADGE_SIGNUP Prompt，批量只复用 HTTP 请求。
  */
+export function quickZeroneBadgeSignup(state: GameState, players: Player[]): Record<string, boolean> {
+  const score = (player: Player): number => {
+    const text = `${state.gameId}:${player.playerId}:${state.day}`;
+    let value = 2166136261;
+    for (let i = 0; i < text.length; i++) value = Math.imul(value ^ text.charCodeAt(i), 16777619);
+    return value >>> 0;
+  };
+  const aliveAI = state.players.filter((player) => player.alive && !player.isHuman);
+  const candidateCount = Math.min(3, Math.max(1, Math.floor(aliveAI.length / 3)));
+  const candidates = new Set(aliveAI.sort((a, b) => score(a) - score(b) || a.seat - b.seat)
+    .slice(0, candidateCount).map((player) => player.playerId));
+  return Object.fromEntries(players.map((player) => [player.playerId, candidates.has(player.playerId)]));
+}
+
 export async function generateAIBadgeSignupBatch(
   state: GameState,
   players: Player[]
 ): Promise<Record<string, boolean>> {
   if (!players || players.length === 0) return {};
+  // 首日没有玩家公开发言可供策略判断；本地决定参选名额，避免九次 Agent 请求阻塞开局。
+  if (process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" && state.day === 1) {
+    return quickZeroneBadgeSignup(state, players);
+  }
 
   const model = getSummaryModel();
   const modelRef = getModelRefForModel(model);
@@ -1297,6 +1322,8 @@ export async function generateAIBadgeSignupBatch(
         model,
         messages,
         promptScope: "gameplay" as const,
+        zeroneSeat: player.seat,
+        zeronePhase: state.phase,
         temperature: GAME_TEMPERATURE.BADGE_SIGNUP,
         response_format: structuredResponseFormat(modelRef, "badge_signup", {
           type: "object",
@@ -1407,6 +1434,7 @@ export async function generateAIBadgeVote(
   try {
     const completion = await generateCompletionAndParse<number>(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1485,6 +1513,7 @@ export async function generateBadgeTransfer(
 
     const completion = await generateCompletionAndParse(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1571,6 +1600,7 @@ export async function generateSeerAction(
   try {
     const completion = await generateCompletionAndParse(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1637,6 +1667,7 @@ export async function generateWolfAction(
   try {
     const completion = await generateCompletionAndParse(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1714,6 +1745,7 @@ export async function generateWitchAction(
   try {
     const completion = await generateCompletionAndParse<WitchAction>(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1809,6 +1841,7 @@ export async function generateGuardAction(
   try {
     const completion = await generateCompletionAndParse(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1878,6 +1911,7 @@ export async function generateHunterShoot(
   try {
     const completion = await generateCompletionAndParse<number | null>(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",
@@ -1964,6 +1998,7 @@ export async function generateWhiteWolfKingBoomDecision(
   try {
     const completion = await generateCompletionAndParse<number | null>(
       mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
+        zeroneSeat: player.seat, zeronePhase: state.phase,
         model: player.agentProfile!.modelRef.model,
         messages,
         promptScope: "gameplay",

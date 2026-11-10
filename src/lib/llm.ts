@@ -21,6 +21,8 @@ import { GAME_SESSION_EXPIRED_CODE } from "@/lib/game-session-policy";
 import { parseLLMJson } from "./llm-json";
 import { generateUUID } from "./utils";
 import { withTimeout } from "@/lib/request-timeout";
+import { isZeroneGameEnabled, zeroneRequestContext } from "@/lib/zerone-game";
+import { finishAiActivity, startAiActivity } from "@/lib/ai-activity";
 import type { PromptScope } from "@/lib/deepseek-prompt-scope";
 import { resolveReasoning, type ReasoningProfile } from "@/lib/reasoning-profile";
 
@@ -214,6 +216,8 @@ export interface ReasoningOptions {
 
 export interface GenerateOptions {
   signal?: AbortSignal;
+  zeroneSeat?: number;
+  zeronePhase?: string;
   model: string;
   provider?: Provider;
   promptScope?: PromptScope;
@@ -391,8 +395,25 @@ async function fetchWithRetry(
 ): Promise<Response> {
   let lastResponse: Response | null = null;
   let lastError: unknown = null;
+  const tracked = isZeroneGameEnabled() && String(input).includes("/api/chat");
+  let streaming = false;
+  if (tracked) {
+    const headers = new Headers(init.headers);
+    let label = `${Number(headers.get("X-Zerone-Seat") || 0) + 1}号 AI 居民`;
+    let phase = headers.get("X-Zerone-Phase") || "AI 决策";
+    try {
+      const body = JSON.parse(String(init.body || "{}"));
+      streaming = body.stream === true;
+      if (Array.isArray(body.requests)) {
+        label = `${body.requests.length} 位 AI 居民`;
+        phase = body.requests[0]?.zeronePhase || phase;
+      }
+    } catch { /* only metadata is needed */ }
+    startAiActivity(logicalRequestId, label, phase);
+  }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (init.signal?.aborted) finishAiActivity(logicalRequestId, "error", "请求已取消");
     init.signal?.throwIfAborted();
     const attemptNumber = ++attemptSequence.current;
     try {
@@ -403,12 +424,16 @@ async function fetchWithRetry(
       const response = await fetch(input, { ...init, headers });
       lastResponse = response;
 
-      if (response.ok) return response;
+      if (response.ok) {
+        if (tracked && !streaming) finishAiActivity(logicalRequestId, "success", `HTTP ${response.status}`);
+        return response;
+      }
 
       const retryableStatuses = modelSource === "tokenpay"
         ? TOKENPAY_RETRYABLE_STATUS
         : RETRYABLE_STATUS;
       if (!retryableStatuses.has(response.status) || attempt === maxAttempts) {
+        if (tracked) finishAiActivity(logicalRequestId, "error", `HTTP ${response.status}`);
         return response;
       }
 
@@ -420,6 +445,7 @@ async function fetchWithRetry(
         jitter;
       await sleep(backoffMs);
     } catch (err) {
+      if (init.signal?.aborted && tracked) finishAiActivity(logicalRequestId, "error", "请求已取消");
       init.signal?.throwIfAborted();
       lastError = err;
       // TokenPay 没有请求幂等键。网络断开时无法确认上游是否已经计费，
@@ -432,7 +458,11 @@ async function fetchWithRetry(
     }
   }
 
-  if (lastResponse) return lastResponse;
+  if (lastResponse) {
+    if (tracked) finishAiActivity(logicalRequestId, "error", `HTTP ${lastResponse.status}`);
+    return lastResponse;
+  }
+  if (tracked) finishAiActivity(logicalRequestId, "error", lastError instanceof Error ? lastError.name : "网络错误");
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
@@ -716,6 +746,7 @@ export async function generateCompletion(
   };
 
   Object.assign(headers, await getAuthHeaders());
+  if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(options.zeroneSeat, options.zeronePhase).headers);
   attachGameSessionHeader(headers);
   const logicalRequestId = generateUUID();
 
@@ -829,12 +860,14 @@ async function generateCompletionBatchInternal(
   };
 
   Object.assign(headers, await getAuthHeaders());
+  if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(requests[0]?.zeroneSeat, requests[0]?.zeronePhase).headers);
   attachGameSessionHeader(headers);
   const logicalRequestId = generateUUID();
 
   const requestsWithIds = resolvedRequests.map((request) => ({
     ...request,
     request_id: generateUUID(),
+    ...(isZeroneGameEnabled() ? zeroneRequestContext(request.zeroneSeat, request.zeronePhase).body : {}),
   }));
   const response = await fetchWithRetry(
     "/api/chat",
@@ -928,6 +961,7 @@ export async function* generateCompletionStream(
   };
 
   Object.assign(headers, await getAuthHeaders());
+  if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(options.zeroneSeat, options.zeronePhase).headers);
   attachGameSessionHeader(headers);
   const logicalRequestId = generateUUID();
 
@@ -965,6 +999,7 @@ export async function* generateCompletionStream(
 
   const reader = response.body?.getReader();
   if (!reader) {
+    finishAiActivity(logicalRequestId, "error", "响应没有内容");
     throw new Error("No response body");
   }
 
@@ -1074,7 +1109,12 @@ export async function* generateCompletionStream(
     if (!streamComplete) {
       throw new Error("模型流式响应在 [DONE] 前意外结束");
     }
+    finishAiActivity(logicalRequestId, "success", "流式完成");
+  } catch (error) {
+    finishAiActivity(logicalRequestId, "error", error instanceof Error ? error.name : "流式中断");
+    throw error;
   } finally {
+    finishAiActivity(logicalRequestId, "error", "请求已取消");
     // 消费方提前退出、对局重置或流超时都必须取消上游读取，避免继续消耗余额。
     await reader.cancel().catch(() => undefined);
   }

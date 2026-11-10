@@ -72,6 +72,7 @@ export function resolveVoiceId(
   age?: number,
   locale: AppLocale = "zh"
 ): string {
+  if (process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1" && input?.trim()) return input.trim();
   const normGender: "male" | "female" = gender === "female" ? "female" : "male";
   
   // Select preset list and defaults based on locale

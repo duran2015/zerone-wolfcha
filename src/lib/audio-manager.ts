@@ -11,7 +11,7 @@ import {
 import { getAuthHeaders } from "@/lib/auth-headers";
 import { gameSessionTracker } from "@/lib/game-session-tracker";
 
-export type TtsProvider = "minimax" | "tokendance";
+export type TtsProvider = "minimax" | "tokendance" | "aliyun";
 
 export interface AudioTask {
   id: string;
@@ -114,6 +114,18 @@ export class AudioManager {
 
   private async fetchAndCache(task: AudioTask) {
     if (!isAiVoiceAvailable()) throw new Error("Character voice requires your own TTS API key");
+    if (process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1") {
+      const response = await fetch("/api/tts", {
+        method: "POST", headers: await this.buildTtsHeaders("aliyun"),
+        body: JSON.stringify({ text: task.text, voiceId: task.voiceId, ttsProvider: "aliyun" }),
+      });
+      if (!response.ok) throw new Error(`Aliyun TTS request failed: ${response.status}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      try { this.cache.set(task.id, { blob, durationMs: await this.getDurationMs(url) }); }
+      finally { URL.revokeObjectURL(url); }
+      return;
+    }
     // A character's LLM provider does not determine which TTS key the user owns.
     const ttsProvider: TtsProvider = task.ttsProvider === "tokendance" && hasTokendanceKey()
       ? "tokendance"
@@ -172,6 +184,11 @@ export class AudioManager {
     }
     this.queue.push(task);
     this.processQueue();
+  }
+
+  isPlaybackPending(playbackId: string): boolean {
+    return (this.currentTask?.playbackId ?? this.currentTask?.id) === playbackId
+      || this.queue.some((task) => (task.playbackId ?? task.id) === playbackId);
   }
 
   stopCurrent() {

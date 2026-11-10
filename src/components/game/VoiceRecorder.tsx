@@ -5,6 +5,7 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo
 import { Microphone, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
+import { getAuthHeaders } from "@/lib/auth-headers";
 
 type RecorderStatus = "idle" | "recording" | "transcribing";
 
@@ -98,6 +99,9 @@ async function decodeToWav(blob: Blob): Promise<Uint8Array> {
   const ctx = new AudioContextCtor();
   try {
     const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
+    if (audioBuffer.duration < 0.8) {
+      throw new Error("录音太短，请说完一句话再结束");
+    }
     const wavAb = audioBufferToWav(audioBuffer);
     return new Uint8Array(wavAb);
   } finally {
@@ -141,7 +145,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
     const isRecording = status === "recording";
   const isBusy = status !== "idle";
-  const sttEnabled = false;
+  const sttEnabled = process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1";
   const sttDisabled = disabled || !sttEnabled;
 
   const canUse = useMemo(() => {
@@ -193,7 +197,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
   useEffect(() => {
     if (!sttEnabled) {
-      setError(t("voiceRecorder.errors.micUnavailable"));
+      setError(t("voiceRecorder.errors.sttUnavailable"));
     }
     return () => {
       cleanupMedia();
@@ -292,13 +296,14 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
           const resp = await fetch("/api/stt", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...await getAuthHeaders() },
             body: JSON.stringify({ audio: b64, format: "wav" }),
           });
 
           if (!resp.ok) {
-            const text = await resp.text();
-            throw new Error(text || `HTTP ${resp.status}`);
+            const failure: unknown = await resp.json().catch(() => null);
+            const message = failure && typeof failure === "object" ? (failure as { error?: unknown }).error : null;
+            throw new Error(typeof message === "string" ? message : `语音识别失败（HTTP ${resp.status}）`);
           }
 
           const json = (await resp.json()) as any;
@@ -387,7 +392,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
             ? t("voiceRecorder.actions.stop")
             : sttEnabled
               ? t("voiceRecorder.actions.voiceInput")
-              : t("voiceRecorder.errors.micUnavailable")
+              : t("voiceRecorder.errors.sttUnavailable")
         }
       >
         {status === "transcribing" ? (
@@ -404,7 +409,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
         ) : (
           <>
             <Microphone size={14} weight="fill" />
-            {t("voiceRecorder.actions.holdToTalk")}
+            {t("voiceRecorder.actions.voiceInput")}
           </>
         )}
       </button>
@@ -412,8 +417,8 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
       {error ? (
         <div
           className={cn(
-            "absolute right-0 -top-5 text-[11px] whitespace-nowrap",
-            isNight ? "text-white/55" : "text-[var(--text-muted)]"
+            "absolute right-0 bottom-full z-20 mb-2 w-64 max-w-[75vw] rounded-md border p-2 text-xs leading-relaxed shadow-lg",
+            isNight ? "border-white/20 bg-[#211e1b] text-white" : "border-[var(--border-color)] bg-white text-[var(--text-primary)]"
           )}
         >
           {error}

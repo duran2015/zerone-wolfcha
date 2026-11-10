@@ -69,7 +69,7 @@ function harness(tts = false) {
     const source = readFileSync(file, "utf8");
     const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     const loadedModule = { exports: {} as any };
-    runInNewContext(`(function(require,module,exports){${code}\n})`, { setTimeout: scheduleTimeout, clearTimeout, AbortController, console })(requireMock, loadedModule, loadedModule.exports);
+    runInNewContext(`(function(require,module,exports){${code}\n})`, { setTimeout: scheduleTimeout, clearTimeout, AbortController, console, process: { env: { NEXT_PUBLIC_ALIYUN_VOICE_ENABLED: "1" } } })(requireMock, loadedModule, loadedModule.exports);
     return loadedModule.exports;
   };
   const dialogue = load("src/hooks/useDialogueManager.ts").useDialogueManager();
@@ -105,7 +105,7 @@ test("A 的迟到流片段与完成事件不能进入 B 的遗言队列", async 
   } finally { h.dispose(); }
 });
 
-test("首段 TTS 延迟时保持字幕顺序、保留重复句，文本就绪后才结束队列", async () => {
+test("TTS 延迟时字幕立即出现、保留重复句，语音等待 Enter 才播放", async () => {
   const h = harness(true);
   try {
     const running = h.day.runAISpeech(h.state, h.first);
@@ -114,14 +114,11 @@ test("首段 TTS 延迟时保持字幕顺序、保留重复句，文本就绪后
     h.pending[0].resolve(["不对。", "继续听。", "不对。"]);
     await tick();
     const queue = h.dialogue.getSpeechQueue();
-    assert.deepEqual([...queue.segments], []);
-    assert.equal(queue.isFinalized, false);
-    h.readiness.get("不对。")!.resolve();
+    assert.deepEqual([...queue.segments], ["不对。", "继续听。", "不对。"]);
     await running;
     assert.deepEqual([...queue.segments], ["不对。", "继续听。", "不对。"]);
     assert.equal(queue.isFinalized, true);
-    await tick(); h.readiness.get("继续听。")!.resolve(); await tick();
-    assert.deepEqual(h.audio, ["不对。", "继续听。", "不对。"]);
+    assert.deepEqual(h.audio, []);
   } finally { h.dispose(); }
 });
 
@@ -162,7 +159,7 @@ for (const mutation of ["gameId", "round", "devMutation", "token", "unmount"] as
 }
 
 
-test("首段已收到但 TTS 尚未就绪时超时，仍给出可推进的兜底段落", async () => {
+test("首段已收到但 TTS 尚未就绪时超时，保留已生成字幕", async () => {
   const h = harness(true);
   try {
     const running = h.day.runAISpeech(h.state, h.first);
@@ -171,11 +168,11 @@ test("首段已收到但 TTS 尚未就绪时超时，仍给出可推进的兜底
     h.timeout();
     await running;
     const queue = h.dialogue.getSpeechQueue();
-    assert.deepEqual([...queue.segments], ["dayPhase.timeout"]);
+    assert.deepEqual([...queue.segments], ["等待语音的首段"]);
     assert.equal(queue.isFinalized, true);
     h.readiness.get("等待语音的首段")!.resolve();
     await tick();
-    assert.deepEqual([...queue.segments], ["dayPhase.timeout"]);
+    assert.deepEqual([...queue.segments], ["等待语音的首段"]);
     assert.deepEqual(h.audio, []);
   } finally { h.dispose(); }
 });

@@ -183,3 +183,24 @@ test("警徽报名单个响应非法或失败时只将对应玩家判为不上�
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Zerone 首日警徽报名本地完成且刷新后结果稳定", async () => {
+  const { generateAIBadgeSignupBatch } = await import("./game-master");
+  const players = Array.from({ length: 9 }, (_, index) => makePlayer(`ai-${index}`, index, "Villager"));
+  const state = makeState(players);
+  const oldMode = process.env.NEXT_PUBLIC_ZERONE_HUB_MODE;
+  const oldFetch = globalThis.fetch;
+  try {
+    process.env.NEXT_PUBLIC_ZERONE_HUB_MODE = "1";
+    globalThis.fetch = async () => { throw new Error("首日报名不应发起模型请求"); };
+    const first = await generateAIBadgeSignupBatch(state, players);
+    const pending = players.slice(4);
+    const resumed = await generateAIBadgeSignupBatch(state, pending);
+    assert.equal(Object.values(first).filter(Boolean).length, 3);
+    assert.deepEqual(resumed, Object.fromEntries(pending.map((player) => [player.playerId, first[player.playerId]])));
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldMode === undefined) delete process.env.NEXT_PUBLIC_ZERONE_HUB_MODE;
+    else process.env.NEXT_PUBLIC_ZERONE_HUB_MODE = oldMode;
+  }
+});
