@@ -76,6 +76,13 @@ export async function syncZeroneGameEvents(state: GameState): Promise<void> {
   state.players.filter((player) => !player.alive).forEach((player) =>
     events.push({ seq: 10_000 + player.seat, type: "eliminated", day: state.day,
       targetSeat: player.seat, detail: `${player.displayName}出局` }));
+  const human = state.players.find((player) => player.isHuman);
+  state.messages.forEach((message, index) => {
+    if (!human || message.isSystem || message.playerId !== human.playerId ||
+        !message.phase?.startsWith("DAY_") || !message.content.trim()) return;
+    events.push({ seq: 30_000 + index, type: "player_speech", day: message.day ?? state.day,
+      actorSeat: human.seat, detail: `${human.displayName}公开发言：${message.content.slice(0, 500)}` });
+  });
   if (state.winner) events.push({ seq: 20_000, type: "game_end", day: state.day, detail: `对局结束，${state.winner}阵营获胜` });
   syncingEvents = true;
   try {

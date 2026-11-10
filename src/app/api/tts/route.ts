@@ -5,6 +5,7 @@ import * as https from "node:https";
 import { URL } from "node:url";
 import * as zlib from "node:zlib";
 import { DEFAULT_VOICE_ID } from "@/lib/voice-constants";
+import { callAliyunVoice, isAliyunVoiceConfigured } from "@/lib/aliyun-voice-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,34 @@ export async function POST(req: NextRequest) {
   const parsedRecord = isRecord(parsed) ? parsed : {};
   const text = typeof parsedRecord.text === "string" ? parsedRecord.text : String(parsedRecord.text ?? "");
   const voiceId = typeof parsedRecord.voiceId === "string" ? parsedRecord.voiceId : String(parsedRecord.voiceId ?? "");
+  if (parsedRecord.ttsProvider === "aliyun") {
+    if (!isAliyunVoiceConfigured()) return NextResponse.json({ error: "阿里云语音尚未配置" }, { status: 503 });
+    const normText = text.trim();
+    if (!normText || normText.length > 1200) return NextResponse.json({ error: "无效或过长的文本" }, { status: 400 });
+    const selectedVoice = /^[a-zA-Z][a-zA-Z0-9_.-]{2,80}$/.test(voiceId)
+      ? voiceId : (process.env.ALIYUN_TTS_VOICE || "longanhuan_v3.1");
+    try {
+      const response = await callAliyunVoice("/api/v1/services/audio/tts/SpeechSynthesizer", {
+        model: process.env.ALIYUN_TTS_MODEL || "qwen-audio-3.1-tts-flash",
+        input: { text: normText, voice: selectedVoice, format: "wav", sample_rate: 24000 },
+      });
+      if (!response.ok) return NextResponse.json({ error: `语音合成服务返回 HTTP ${response.status}` }, { status: 502 });
+      const result: unknown = await response.json();
+      const audioUrl = result && typeof result === "object" && "output" in result
+        ? (result as { output?: { audio?: { url?: unknown } } }).output?.audio?.url : null;
+      if (typeof audioUrl !== "string") return NextResponse.json({ error: "语音合成结果无音频" }, { status: 502 });
+      const url = new URL(audioUrl);
+      if (!/^https?:$/.test(url.protocol) || !url.hostname.endsWith(".aliyuncs.com")) {
+        return NextResponse.json({ error: "语音合成音频地址无效" }, { status: 502 });
+      }
+      const audio = await fetch(url, { signal: AbortSignal.timeout(30_000), cache: "no-store" });
+      if (!audio.ok) return NextResponse.json({ error: "语音音频下载失败" }, { status: 502 });
+      return new Response(audio.body, { status: 200, headers: { "Content-Type": audio.headers.get("content-type") || "audio/wav", "Cache-Control": "no-store" } });
+    } catch (error) {
+      console.error("[aliyun-voice] TTS failed", error);
+      return NextResponse.json({ error: "语音合成请求失败" }, { status: 502 });
+    }
+  }
   const ttsProvider = parsedRecord.ttsProvider === "tokendance" ? "tokendance" : "minimax";
   const headerApiKey = req.headers.get("x-minimax-api-key")?.trim();
   const headerGroupId = req.headers.get("x-minimax-group-id")?.trim();

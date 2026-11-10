@@ -1257,6 +1257,11 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-transparent">
+      {process.env.NEXT_PUBLIC_ZERONE_MOCK_MODE === "1" && (
+        <div className="fixed right-4 top-4 z-[9999] rounded-full border border-amber-500/70 bg-[#25221d] px-3 py-1 text-xs text-amber-200 shadow-lg">
+          模拟 Zerone Hub · 仅供流程演示
+        </div>
+      )}
       {process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE !== "1" && <TokenPayRecoveryHost />}
       <GameBackground isNight={visualIsNight} isBlinking={!!dayNightBlinkPhase} />
 
@@ -1308,7 +1313,7 @@ export default function Home() {
               humanName={humanName}
               setHumanName={setHumanName}
               onStart={(options) => {
-                setAiVoiceEnabled(false);
+                setAiVoiceEnabled(process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1");
                 return startGame({ ...(options ?? {}), isGenshinMode, isSpectatorMode });
               }}
               onAbort={restartGame}

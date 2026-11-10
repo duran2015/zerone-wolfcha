@@ -1430,6 +1430,7 @@
     },
     "errors": {
       "micUnavailable": "Unable to access the microphone",
+      "sttUnavailable": "Voice input is not connected yet",
       "recordFailed": "Recording failed. Please try again.",
       "noAudio": "No audio captured. Please try again.",
       "noTranscript": "No transcript returned.",

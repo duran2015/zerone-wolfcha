@@ -5,6 +5,7 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo
 import { Microphone, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
+import { getAuthHeaders } from "@/lib/auth-headers";
 
 type RecorderStatus = "idle" | "recording" | "transcribing";
 
@@ -141,7 +142,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
     const isRecording = status === "recording";
   const isBusy = status !== "idle";
-  const sttEnabled = false;
+  const sttEnabled = process.env.NEXT_PUBLIC_ALIYUN_VOICE_ENABLED === "1";
   const sttDisabled = disabled || !sttEnabled;
 
   const canUse = useMemo(() => {
@@ -193,7 +194,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
   useEffect(() => {
     if (!sttEnabled) {
-      setError(t("voiceRecorder.errors.micUnavailable"));
+      setError(t("voiceRecorder.errors.sttUnavailable"));
     }
     return () => {
       cleanupMedia();
@@ -292,7 +293,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
 
           const resp = await fetch("/api/stt", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...await getAuthHeaders() },
             body: JSON.stringify({ audio: b64, format: "wav" }),
           });
 
@@ -387,7 +388,7 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
             ? t("voiceRecorder.actions.stop")
             : sttEnabled
               ? t("voiceRecorder.actions.voiceInput")
-              : t("voiceRecorder.errors.micUnavailable")
+              : t("voiceRecorder.errors.sttUnavailable")
         }
       >
         {status === "transcribing" ? (
