@@ -55,6 +55,7 @@ import { AiActivityPanel } from "@/components/game/AiActivityPanel";
 
 import { buildSimpleAvatarUrl, getModelLogoUrl } from "@/lib/avatar-config";
 import { audioManager, makeAudioTaskId } from "@/lib/audio-manager";
+import { zeroneResidentVoiceRate } from "@/lib/zerone-resident-minds";
 import { getNarratorPlayer } from "@/lib/narrator-audio-player";
 import { resolveVoiceId, type AppLocale } from "@/lib/voice-constants";
 import { getLocale } from "@/i18n/locale-store";
@@ -678,7 +679,7 @@ export default function Home() {
     const durationMs = audioManager.getCachedDurationMs(taskId);
     if (!durationMs || durationMs <= 0) return 25;
 
-    const raw = durationMs / Math.max(1, text.length);
+    const raw = durationMs / zeroneResidentVoiceRate(player?.avatarSeed) / Math.max(1, text.length);
     return Math.min(60, Math.max(10, Math.round(raw)));
   }, [currentDialogue, gameState.players]);
 
@@ -710,7 +711,8 @@ export default function Home() {
     const playbackId = crypto.randomUUID();
     spokenDialogueRef.current = { dialogue: currentDialogue, playbackId };
     audioManager.addToQueue({ id: makeAudioTaskId(voiceId, currentDialogue.text, ttsProvider),
-      playbackId, text: currentDialogue.text, voiceId, playerId: player.playerId, ttsProvider });
+      playbackId, text: currentDialogue.text, voiceId, playerId: player.playerId, ttsProvider,
+      playbackRate: zeroneResidentVoiceRate(player.avatarSeed) });
     return true;
   }, [shouldUseAiVoice, currentDialogue, completedText, gameState.players, t]);
 

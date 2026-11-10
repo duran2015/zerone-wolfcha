@@ -17,3 +17,14 @@ const minds: Record<string, PlayerMind> = {
 export function zeroneResidentMind(characterId: string): PlayerMind | undefined {
   return minds[characterId];
 }
+
+// A small pace difference complements each resident's distinct Aliyun voice.
+// Keep the range natural so the speech remains intelligible.
+const voiceRates: Record<string, number> = {
+  zhou: 0.94, zhen: 1.04, lin: 1.10, chen: 0.93, meimei: 1.08,
+  jie: 0.97, xiaoyu: 0.92, laowu: 0.99, tang: 0.95,
+};
+
+export function zeroneResidentVoiceRate(characterId: string | undefined): number {
+  return characterId ? voiceRates[characterId] ?? 1 : 1;
+}

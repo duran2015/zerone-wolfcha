@@ -1474,7 +1474,7 @@ export function useGameLogic() {
       // 演示对局让真人尽早轮到发言；普通对局仍随机座位。
       // 观战模式没有人类玩家。
       const humanSeat = isSpectatorMode ? -1
-        : process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" ? Math.min(1, totalPlayers - 1)
+        : process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" ? Math.min(2, totalPlayers - 1)
         : getRandomHumanSeat(totalPlayers);
 
       const aiSeats = Array.from({ length: totalPlayers }, (_, seat) => seat).filter(

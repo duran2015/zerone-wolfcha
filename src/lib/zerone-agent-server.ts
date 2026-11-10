@@ -48,12 +48,16 @@ export async function isZeroneAgentReady(): Promise<boolean> {
   if (!isZeroneAgentConfigured()) return false;
   try {
     const seats = runtimeSeats();
-    const checks = await Promise.all(residents.map(async ([id]) => {
-      const response = await fetch(agentUrl(seats[id]), { headers: { "x-api-key": seats[id].apiKey },
-        signal: AbortSignal.timeout(5_000), cache: "no-store" });
-      return response.ok;
-    }));
-    return checks.every(Boolean);
+    // Nine concurrent detail requests can overload a small Runtime deployment.
+    for (let index = 0; index < residents.length; index += 3) {
+      const checks = await Promise.all(residents.slice(index, index + 3).map(async ([id]) => {
+        const response = await fetch(agentUrl(seats[id]), { headers: { "x-api-key": seats[id].apiKey },
+          signal: AbortSignal.timeout(10_000), cache: "no-store" });
+        return response.ok;
+      }));
+      if (!checks.every(Boolean)) return false;
+    }
+    return true;
   } catch { return false; }
 }
 

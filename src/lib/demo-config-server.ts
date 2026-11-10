@@ -2,7 +2,7 @@ import type { DemoModePublicConfigSnapshot } from "@/lib/demo-config";
 import { ensureAdminClient, supabaseAdmin } from "@/lib/supabase-admin";
 import type { Database } from "@/types/database";
 import { isZeroneHubConfigured, isZeroneHubMode, requestZeroneHub } from "@/lib/zerone-hub-server";
-import { isZeroneAgentReady } from "@/lib/zerone-agent-server";
+import { isZeroneAgentConfigured } from "@/lib/zerone-agent-server";
 
 type DemoConfigRow = Database["public"]["Tables"]["demo_config"]["Row"];
 
@@ -85,7 +85,9 @@ async function loadDemoConfigRow() {
 export async function getDemoModeConfigServer(): Promise<DemoModePublicConfigSnapshot> {
   const now = new Date();
   if (process.env.ZERONE_DEMO_MODE === "1") {
-    let hubReady = await isZeroneAgentReady();
+    // The landing page only needs configuration readiness. Probing all nine
+    // remote Agents here can make a playable demo appear stuck for minutes.
+    let hubReady = isZeroneAgentConfigured();
     if (!hubReady && isZeroneHubMode() && isZeroneHubConfigured()) {
       try {
         const response = await requestZeroneHub("/roster?gameKey=wolfcha", { signal: AbortSignal.timeout(5_000) });

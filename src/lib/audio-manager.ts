@@ -21,6 +21,7 @@ export interface AudioTask {
   voiceId: string;
   playerId: string;
   ttsProvider?: TtsProvider;
+  playbackRate?: number;
 }
 
 export function makeAudioTaskId(voiceId: string, text: string, ttsProvider: TtsProvider = "minimax") {
@@ -222,6 +223,7 @@ export class AudioManager {
 
     const url = URL.createObjectURL(cached.blob);
     const audio = new Audio(url);
+    audio.playbackRate = Math.min(1.15, Math.max(0.85, task.playbackRate ?? 1));
     this.currentAudio = audio;
     audio.onloadedmetadata = () => {
       const existing = this.cache.get(task.id);
