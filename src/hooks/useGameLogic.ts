@@ -2316,6 +2316,15 @@ export function useGameLogic() {
 
     const queue = getSpeechQueue();
     if (!queue || (queue.request && !queue.request.isValid())) {
+      const liveState = gameStateRef.current;
+      const speaker = liveState.players.find((player) => player.seat === liveState.currentSpeakerSeat);
+      // 热更新或刷新可能丢掉内存队列，但已显示的 AI 发言仍应能继续到下一位。
+      if (currentDialogue && !isWaitingForAI && speaker?.displayName === currentDialogue.speaker &&
+          ["DAY_SPEECH", "DAY_LAST_WORDS", "DAY_BADGE_SPEECH", "DAY_PK_SPEECH"].includes(liveState.phase)) {
+        clearSpeechQueue();
+        clearDialogue();
+        return { finished: true, shouldAdvanceToNextSpeaker: true, shouldAutoAdvanceToNextAI: false };
+      }
       return { finished: false, shouldAdvanceToNextSpeaker: false, shouldAutoAdvanceToNextAI: false };
     }
 
@@ -2380,7 +2389,7 @@ export function useGameLogic() {
     // 不设置 waitingForNextRound，直接返回 shouldAdvanceToNextSpeaker: true
     // 让调用方立即调用 handleNextRound，避免单条消息时需要按两次回车的问题
     return { finished: true, shouldAdvanceToNextSpeaker: true, shouldAutoAdvanceToNextAI: false };
-  }, [clearDialogue, clearSpeechQueue, isSpeechBlocked, buildRawDayTranscript, maybeGenerateDailySummary, setIsWaitingForAI, setWaitingForNextRound, getSpeechQueue, advanceSpeechQueue, setGameState, isCurrentSegmentCommitted, markCurrentSegmentCommitted, isCurrentSegmentCompleted]);
+  }, [clearDialogue, clearSpeechQueue, currentDialogue, isWaitingForAI, isSpeechBlocked, buildRawDayTranscript, maybeGenerateDailySummary, setIsWaitingForAI, setWaitingForNextRound, getSpeechQueue, advanceSpeechQueue, setGameState, isCurrentSegmentCommitted, markCurrentSegmentCommitted, isCurrentSegmentCompleted]);
 
   /** 切换暂停 */
   const togglePause = useCallback(() => {

@@ -711,8 +711,8 @@ export default function Home() {
       // 如果焦点在输入元素内，不拦截左右方向键（让光标正常移动）
       if (isInInput && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
-      // 如果焦点在输入元素内，不拦截 Enter 键（让输入框正常处理）
-      if (isInInput && e.key === "Enter") return;
+      // AI 发言已显示时，旧的玩家输入框可能仍保留焦点；此时 Enter 应继续对话。
+      if (isInInput && e.key === "Enter" && (!currentDialogue || activeEl?.closest("[role='dialog']"))) return;
 
       // Enter or Right arrow to advance
       if ((e.key === "Enter" && !e.shiftKey) || e.key === "ArrowRight") {
@@ -720,6 +720,7 @@ export default function Home() {
         if (currentDialogue) {
           e.preventDefault();
           audioManager.stopCurrent();
+          if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
           Promise.resolve(advanceSpeech()).then((r) => {
             if (r?.shouldAdvanceToNextSpeaker) {
               handleNextRound();
@@ -738,7 +739,7 @@ export default function Home() {
     
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentDialogue, waitingForNextRound, advanceSpeech, handleNextRound, isRoleRevealOpen, isNotebookOpen, isEventLogOpen]);
+  }, [currentDialogue, completedText, waitingForNextRound, advanceSpeech, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, isNotebookOpen, isEventLogOpen]);
 
   const handleAdvanceDialogue = useCallback(async () => {
     if (isRoleRevealOpen) return;
@@ -747,6 +748,7 @@ export default function Home() {
     lastAdvanceTimeRef.current = now;
 
     if (currentDialogue) {
+      if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
       const r = await advanceSpeech();
       if (r?.shouldAdvanceToNextSpeaker) {
         await handleNextRound();
@@ -757,7 +759,7 @@ export default function Home() {
     if (waitingForNextRound) {
       await handleNextRound();
     }
-  }, [advanceSpeech, currentDialogue, handleNextRound, isRoleRevealOpen, waitingForNextRound]);
+  }, [advanceSpeech, completedText, currentDialogue, handleNextRound, markCurrentSegmentCompleted, isRoleRevealOpen, waitingForNextRound]);
 
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const lastAutoAdvanceSignatureRef = useRef<string | null>(null);
