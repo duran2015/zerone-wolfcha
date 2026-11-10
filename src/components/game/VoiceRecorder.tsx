@@ -99,6 +99,9 @@ async function decodeToWav(blob: Blob): Promise<Uint8Array> {
   const ctx = new AudioContextCtor();
   try {
     const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
+    if (audioBuffer.duration < 0.8) {
+      throw new Error("录音太短，请说完一句话再结束");
+    }
     const wavAb = audioBufferToWav(audioBuffer);
     return new Uint8Array(wavAb);
   } finally {
@@ -298,8 +301,9 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
           });
 
           if (!resp.ok) {
-            const text = await resp.text();
-            throw new Error(text || `HTTP ${resp.status}`);
+            const failure: unknown = await resp.json().catch(() => null);
+            const message = failure && typeof failure === "object" ? (failure as { error?: unknown }).error : null;
+            throw new Error(typeof message === "string" ? message : `语音识别失败（HTTP ${resp.status}）`);
           }
 
           const json = (await resp.json()) as any;
@@ -413,8 +417,8 @@ export const VoiceRecorder = forwardRef<VoiceRecorderHandle, VoiceRecorderProps>
       {error ? (
         <div
           className={cn(
-            "absolute right-0 -top-5 text-[11px] whitespace-nowrap",
-            isNight ? "text-white/55" : "text-[var(--text-muted)]"
+            "absolute right-0 bottom-full z-20 mb-2 w-64 max-w-[75vw] rounded-md border p-2 text-xs leading-relaxed shadow-lg",
+            isNight ? "border-white/20 bg-[#211e1b] text-white" : "border-[var(--border-color)] bg-white text-[var(--text-primary)]"
           )}
         >
           {error}

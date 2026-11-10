@@ -20,7 +20,17 @@ export async function POST(request: NextRequest) {
       input: { messages: [{ role: "user", content: [{ type: "input_audio", input_audio: { data: `data:audio/wav;base64,${audio}` } }] }] },
       parameters: { format: "wav" },
     });
-    if (!response.ok) return NextResponse.json({ error: `语音识别服务返回 HTTP ${response.status}` }, { status: 502 });
+    if (!response.ok) {
+      const failure: unknown = await response.json().catch(() => null);
+      const code = failure && typeof failure === "object" ? (failure as { code?: unknown; message?: unknown }).code : null;
+      const detail = failure && typeof failure === "object" ? (failure as { message?: unknown }).message : null;
+      if (["ASR_RESPONSE_HAVE_NO_WORDS", "NO_INPUT_AUDIO_ERROR", "SUCCESS_WITH_NO_VALID_FRAGMENT"].includes(String(code))
+        || detail === "ASR_RESPONSE_HAVE_NO_WORDS") {
+        return NextResponse.json({ error: "没识别到人声，请靠近麦克风说一句完整的话后再结束录音" }, { status: 422 });
+      }
+      console.warn("[aliyun-voice] ASR rejected request", { status: response.status, code: typeof code === "string" ? code : undefined });
+      return NextResponse.json({ error: "语音识别失败，请检查麦克风后重试" }, { status: 502 });
+    }
     const result: unknown = await response.json();
     const text = result && typeof result === "object" && "output" in result
       ? (result as { output?: { text?: unknown } }).output?.text : null;
