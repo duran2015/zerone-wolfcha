@@ -6,6 +6,8 @@ export type AiActivity = {
   endedAt?: number;
   status: "running" | "success" | "error";
   detail?: string;
+  retryCount?: number;
+  activeAttempts?: number;
 };
 
 const activities: AiActivity[] = [];
@@ -40,10 +42,31 @@ export function subscribeAiActivities(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+export function clearAiActivities(): void {
+  activities.splice(0, activities.length);
+  loaded = true;
+  if (typeof window !== "undefined") {
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* storage may be unavailable */ }
+  }
+  listeners.forEach((listener) => listener());
+}
+
 export function startAiActivity(id: string, label: string, phase: string): void {
   if (typeof window === "undefined") return;
   load();
-  activities.push({ id, label, phase, startedAt: Date.now(), status: "running" });
+  const existing = activities.findLast((item) => item.id === id);
+  if (existing) {
+    existing.label = label;
+    existing.phase = phase;
+    existing.status = "running";
+    existing.endedAt = undefined;
+    existing.detail = undefined;
+    existing.retryCount = (existing.retryCount ?? 0) + 1;
+    existing.activeAttempts = (existing.activeAttempts ?? 1) + 1;
+    publish();
+    return;
+  }
+  activities.push({ id, label, phase, startedAt: Date.now(), status: "running", activeAttempts: 1 });
   if (activities.length > 30) activities.splice(0, activities.length - 30);
   publish();
 }
@@ -51,8 +74,14 @@ export function startAiActivity(id: string, label: string, phase: string): void 
 export function finishAiActivity(id: string, status: "success" | "error", detail?: string): void {
   const activity = activities.findLast((item) => item.id === id && item.status === "running");
   if (!activity) return;
+  if (status === "error" && (activity.activeAttempts ?? 1) > 1) {
+    activity.activeAttempts = (activity.activeAttempts ?? 1) - 1;
+    publish();
+    return;
+  }
   activity.status = status;
   activity.endedAt = Date.now();
   activity.detail = detail;
+  activity.activeAttempts = 0;
   publish();
 }

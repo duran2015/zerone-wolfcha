@@ -7,7 +7,8 @@ import {
 import { ALL_MODELS, PROJECT_MODELS } from "@/types/game";
 import { randomUUID } from "node:crypto";
 import { isZeroneHubMode, requestZeroneHub } from "@/lib/zerone-hub-server";
-import { isZeroneAgentConfigured, requestZeroneAgent } from "@/lib/zerone-agent-server";
+import { isZeroneAgentConfigured, requestZeroneAgent, zeroneAgentTimeoutMs } from "@/lib/zerone-agent-server";
+import { classifyZeroneRequestError } from "@/lib/zerone-request-error";
 import { applyTokenDanceResponseFormat } from "@/lib/tokendance-response-format";
 import {
   getConnectedTokenPayApiKey,
@@ -775,18 +776,69 @@ export async function POST(request: NextRequest) {
         };
         if (Array.isArray(body.requests)) {
           if (body.requests.length > MAX_BATCH_REQUESTS) return NextResponse.json({ error: "Too many batch requests" }, { status: 400 });
-          const results = await Promise.all(body.requests.map(async (item: Record<string, unknown>) => {
-            if (!Array.isArray(item.messages) || item.stream === true) return { ok: false, status: 400, error: "Invalid batch request" };
-            const upstream = await invoke(item);
-            if (!upstream.ok) return { ok: false, status: upstream.status, error: `Zerone Hub returned HTTP ${upstream.status}` };
-            return { ok: true, status: 200, data: await upstream.json() };
-          }));
+          const results = [];
+          for (let offset = 0; offset < body.requests.length; offset += 3) {
+            const batch = body.requests.slice(offset, offset + 3) as Record<string, unknown>[];
+            results.push(...await Promise.all(batch.map(async (item) => {
+              if (!Array.isArray(item.messages) || item.stream === true) return { ok: false, status: 400, error: "Invalid batch request" };
+              const batchStartedAt = Date.now();
+              try {
+                const upstream = await invoke(item);
+                if (!upstream.ok) {
+                  console.warn("[zerone] batch runtime HTTP error", {
+                    seat: item.zeroneSeat,
+                    phase: typeof item.zeronePhase === "string" ? item.zeronePhase : phase,
+                    errorType: "runtime_http",
+                    status: upstream.status,
+                    elapsedMs: Date.now() - batchStartedAt,
+                  });
+                  return { ok: false, status: upstream.status, error: `Runtime returned HTTP ${upstream.status}`, errorType: "runtime_http" };
+                }
+                return { ok: true, status: 200, data: await upstream.json() };
+              } catch (error) {
+                const itemPhase = typeof item.zeronePhase === "string" ? item.zeronePhase : phase;
+                const elapsedMs = Date.now() - batchStartedAt;
+                const failure = classifyZeroneRequestError(error, zeroneAgentTimeoutMs(itemPhase));
+                console.warn("[zerone] batch seat failed", {
+                  seat: item.zeroneSeat,
+                  phase: itemPhase,
+                  errorType: failure.type,
+                  errorName: error instanceof Error ? error.name : "unknown",
+                  elapsedMs,
+                });
+                return { ok: false, status: failure.status, error: failure.error, errorType: failure.type };
+              }
+            })));
+          }
           return NextResponse.json({ results });
         }
         if (!Array.isArray(body.messages)) return NextResponse.json({ error: "Invalid messages" }, { status: 400 });
-        const upstream = await invoke(body);
-        return new Response(upstream.body, { status: upstream.status,
-          headers: { "Content-Type": upstream.headers.get("content-type") || (body.stream ? "text/event-stream" : "application/json") } });
+        const singlePhase = typeof body.zeronePhase === "string" ? body.zeronePhase : phase;
+        const singleStartedAt = Date.now();
+        try {
+          const upstream = await invoke(body);
+          const runtimeError = !upstream.ok ? `Runtime returned HTTP ${upstream.status}` : null;
+          if (runtimeError) console.warn("[zerone] runtime HTTP error", {
+            seat: body.zeroneSeat ?? fallbackSeat, phase: singlePhase, status: upstream.status,
+            errorType: "runtime_http", elapsedMs: Date.now() - singleStartedAt,
+          });
+          return new Response(upstream.body, { status: upstream.status,
+            headers: {
+              "Content-Type": upstream.headers.get("content-type") || (body.stream ? "text/event-stream" : "application/json"),
+              ...(upstream.headers.get("retry-after") ? { "Retry-After": upstream.headers.get("retry-after")! } : {}),
+              ...(runtimeError ? { "X-Zerone-Error-Type": "runtime_http", "X-Zerone-Error-Detail": runtimeError } : {}),
+            } });
+        } catch (error) {
+          const failure = classifyZeroneRequestError(error, zeroneAgentTimeoutMs(singlePhase));
+          console.warn("[zerone] single request failed", {
+            seat: body.zeroneSeat ?? fallbackSeat, phase: singlePhase, errorType: failure.type,
+            errorName: error instanceof Error ? error.name : "unknown", elapsedMs: Date.now() - singleStartedAt,
+          });
+          return NextResponse.json({ error: failure.error, errorType: failure.type }, {
+            status: failure.status,
+            headers: { "X-Zerone-Error-Type": failure.type, "X-Zerone-Error-Detail": failure.error },
+          });
+        }
       } catch (error) {
         console.error("[zerone-hub] generation failed", error);
         return NextResponse.json({ error: "Zerone Hub request failed" }, { status: 502 });

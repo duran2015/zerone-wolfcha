@@ -37,7 +37,7 @@ const ROLE_PORTRAIT_MAP: Record<string, string> = {
   Hunter: '/roles/hunter.png',
   Guard: '/roles/guard.png',
   Idiot: '/roles/idiot.png',
-  Villager: '/roles/villager.png',
+  Villager: '/roles/villager.svg',
 };
 
 // 预加载所有职业立绘
@@ -268,6 +268,7 @@ interface DialogAreaProps {
   inputText?: string;
   onInputChange?: (text: string) => void;
   onSendMessage?: () => void;
+  onVoiceTranscriptSubmit?: (text: string) => void;
   onFinishSpeaking?: () => void;
   // 操作相关 (从 BottomActionPanel 合并)
   selectedSeat?: number | null;
@@ -384,6 +385,7 @@ export function DialogArea({
   inputText = "",
   onInputChange,
   onSendMessage,
+  onVoiceTranscriptSubmit,
   onFinishSpeaking,
   // 操作相关
   selectedSeat = null,
@@ -984,7 +986,7 @@ export function DialogArea({
       <div className="flex-1 min-h-0 w-full -mb-1">
         <div className="wc-dialog-main flex gap-4 lg:gap-6 px-4 lg:px-6 pt-0 pb-0 min-h-0 h-full items-stretch">
           {/* 左侧立绘区域 */}
-          <div className="wc-dialog-portrait hidden md:flex w-[220px] lg:w-[260px] xl:w-[300px] shrink-0 flex-col items-center justify-end">
+          <div className="wc-dialog-portrait hidden 2xl:flex w-[220px] lg:w-[260px] xl:w-[300px] shrink-0 flex-col items-center justify-end">
             {portraitNode}
           </div>
 
@@ -1052,7 +1054,8 @@ export function DialogArea({
                       <motion.div key={`live-speech-${liveSpeaker.playerId}`} layout aria-live="polite">
                         <ChatMessageItem
                           msg={{ id: `live-${liveSpeaker.playerId}`, playerId: liveSpeaker.playerId,
-                            playerName: liveSpeaker.displayName, content: liveSpeech, timestamp: Date.now() }}
+                            playerName: liveSpeaker.displayName, content: liveSpeech,
+                            timestamp: visibleMessages.at(-1)?.timestamp ?? gameState.startTime ?? 0 }}
                           players={gameState.players}
                           humanPlayerId={humanPlayer?.playerId}
                           showDivider={visibleMessages.at(-1)?.playerId !== liveSpeaker.playerId}
@@ -1123,7 +1126,7 @@ export function DialogArea({
       </div>
 
       {/* 下方：对话框 - 固定在底部 */}
-      <div className="wc-dialog-bottom mt-auto shrink-0 px-4 lg:px-6 pb-4 lg:pb-6 pt-0">
+      <div className="wc-dialog-bottom mt-auto shrink-0 max-h-[78%] overflow-y-auto px-4 lg:px-6 pb-6 lg:pb-24 pt-0">
         {/* 投票进度 */}
         {(gameState.phase === "DAY_VOTE" || gameState.phase === "DAY_BADGE_ELECTION") && (
           <div className="mb-3 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg p-3">
@@ -1538,7 +1541,7 @@ export function DialogArea({
                       </button>
                     </div>
                   )}
-                  <div className="wc-input-box relative" style={{ minHeight: "112px", alignItems: "flex-start", padding: "14px 16px 56px" }}>
+                  <div className="wc-input-box relative flex-col !h-auto min-h-[112px] !items-stretch gap-3 p-3 sm:p-4">
                     <MentionInput
                       key={`mention-input-${gameState.phase}-${gameState.currentSpeakerSeat}`}
                       value={inputText}
@@ -1559,14 +1562,17 @@ export function DialogArea({
                       isGenshinMode={isGenshinMode}
                       players={gameState.players.filter((p) => p.alive)}
                     />
-                    
-                    {/* 底部按钮栏 - 在输入框内部右下角 */}
-                    <div className="absolute bottom-3 right-3 flex items-center gap-2">
+
+                    <div className={`flex w-full flex-wrap items-center justify-end gap-2 border-t pt-3 ${isNight ? "border-white/10" : "border-black/5"}`}>
                       <VoiceRecorder
                         ref={voiceRecorderRef}
                         disabled={!isHumanTurn}
                         isNight={isNight}
                         onTranscript={(text) => {
+                          if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" && onVoiceTranscriptSubmit) {
+                            onVoiceTranscriptSubmit(text);
+                            return;
+                          }
                           const prev = String(inputText || "");
                           const next = prev.trim().length > 0 ? `${prev.trim()} ${text}` : text;
                           onInputChange?.(next);

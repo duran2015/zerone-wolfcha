@@ -60,3 +60,26 @@ test("单个订阅者抛错不会影响其他订阅者或 log", async () => {
     unsubscribeReceiving();
   }
 });
+
+test("可预期的 Agent 失败写 warning，不触发 Next.js 开发错误覆盖层", async () => {
+  const aiLogger = await getLogger();
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const errors: unknown[][] = [];
+  const warnings: unknown[][] = [];
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    await aiLogger.log({ ...makeEntry("zerone-agent"), error: "Runtime returned HTTP 429" });
+    assert.equal(errors.length, 0);
+    assert.equal(warnings.length, 1);
+    assert.match(String(warnings[0][1]), /429/);
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});

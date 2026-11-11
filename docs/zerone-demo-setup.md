@@ -4,7 +4,7 @@
 
 ## 首选：九名独立 Zerone Agent
 
-在 Zerone 部署 `wolfcha-zhou`、`wolfcha-zhen`、`wolfcha-lin`、`wolfcha-chen`、`wolfcha-meimei`、`wolfcha-jie`、`wolfcha-xiaoyu`、`wolfcha-laowu`、`wolfcha-tang`。服务端 `.env.local` 使用一行 `ZERONE_AGENTS_JSON` 保存九人映射，每项包含 `name`、`url`（Runtime 根地址）和 `apiKey`（该 Agent 的独立运行密钥）。`ZERONE_DEMO_MODE`、`NEXT_PUBLIC_ZERONE_DEMO_MODE`、`ZERONE_HUB_MODE`、`NEXT_PUBLIC_ZERONE_HUB_MODE` 均设为 `1`。此路径不需要 `ZERONE_HUB_BASE_URL` 或 `ZERONE_SERVICE_KEY`。每次模型请求按座位路由到相应 Agent，并携带该角色可见的本局上下文；首次运行后复用各自的 Runtime 会话。玩家公开发言和票型写入本机 `.data/zerone-agent-public-memory.json`，后续对局作为公开事实参考。该记忆仅供本机演示，正式部署需要迁入持久数据库。
+在 Zerone 部署 `wolfcha-zhou`、`wolfcha-zhen`、`wolfcha-lin`、`wolfcha-chen`、`wolfcha-meimei`、`wolfcha-jie`、`wolfcha-xiaoyu`、`wolfcha-laowu`、`wolfcha-tang`。服务端 `.env.local` 使用一行 `ZERONE_AGENTS_JSON` 保存九人映射，每项包含 `name`、`url`（Runtime 根地址）和 `apiKey`（该 Agent 的独立运行密钥）。`ZERONE_DEMO_MODE`、`NEXT_PUBLIC_ZERONE_DEMO_MODE`、`ZERONE_HUB_MODE`、`NEXT_PUBLIC_ZERONE_HUB_MODE` 均设为 `1`。此路径不需要 `ZERONE_HUB_BASE_URL` 或 `ZERONE_SERVICE_KEY`。每次模型请求按座位路由到相应 Agent，并携带该角色可见的本局上下文；每次请求独立运行，不复用 Runtime 会话。演示默认 `ZERONE_CROSS_GAME_MEMORY=0`，不读取本机跨局公开记忆；事件仍可写入本机 `.data/zerone-agent-public-memory.json`。
 
 ## 旧路径：配置 Zerone Hub 游戏座位接口
 
@@ -18,7 +18,7 @@ export WOLFCHA_TEMPLATE_AGENT_NAME='已有 Agent 的准确名称' # 可选；不
 
 在 Hub 工程执行 `go run ./cmd/seed-game-seats`，创建九名 Wolfcha 居民，再启动 Hub。详见 Hub 仓库的 `docs/game-seats-setup.md`。`GET /api/v1/game-seats/roster?gameKey=wolfcha` 应返回至少九名居民。
 
-## 2. 配置 Wolfcha
+## 2. 配置 Wolfcha（Runtime 路径）
 
 ```bash
 pnpm install --frozen-lockfile
@@ -32,13 +32,13 @@ ZERONE_DEMO_MODE=1
 NEXT_PUBLIC_ZERONE_DEMO_MODE=1
 ZERONE_HUB_MODE=1
 NEXT_PUBLIC_ZERONE_HUB_MODE=1
-ZERONE_HUB_BASE_URL=http://localhost:8081
-ZERONE_SERVICE_KEY=与Hub的GAME_SEATS_SERVICE_KEY相同的值
+ZERONE_CROSS_GAME_MEMORY=0
+ZERONE_AGENTS_JSON={"character-id":{"name":"Agent准确名称","url":"Runtime根地址","apiKey":"独立运行密钥"}}
 ```
 
-`ZERONE_HUB_BASE_URL` 是 Hub API 服务的根地址，不是 Zerone 后台网页地址；不要附加 `/api/v1/game-seats`。`ZERONE_SERVICE_KEY` 只留在本机或部署环境，不提交到 Git。此模式不需要填写 `OPENAI_COMPAT_*`、阿里云模型密钥、Supabase、ZenMux、DashScope 或 TokenDance 凭证。
+`ZERONE_AGENTS_JSON` 必须覆盖九名居民；准确的 character ID 以 `.env.example` 和启动就绪检查为准。每项 `url` 是已部署 Agent 的 Runtime 根地址，`apiKey` 是该 Agent 的运行密钥。它们只留在 `.env.local`，不要提交到 Git。Runtime 路径不需要 `ZERONE_HUB_BASE_URL`、`ZERONE_SERVICE_KEY`、`OPENAI_COMPAT_*`、Supabase、ZenMux、DashScope 或 TokenDance 凭证。
 
-运行 `pnpm dev` 并打开 <http://localhost:3000>。首页会检查 Hub 服务和九名居民是否就绪。Wolfcha 固定使用一名真人加九名 Zerone 居民的十人局；开局时创建 Hub session，后续按居民座位转发模型请求，并回写投票、出局及终局事件。浏览器刷新后仍可通过本地存档恢复 Hub session。
+演示时运行 `pnpm dev` 并打开 <http://127.0.0.1:3000/zh>。`dev` 和 `start` 脚本都仅监听本机 `127.0.0.1`。首页会检查九个 Runtime Agent 是否就绪。Wolfcha 固定使用一名真人加九名 Zerone 居民的十人局；模型请求按座位转发到各自 Runtime，投票、出局及终局事件仍由 Wolfcha 记录。浏览器刷新后通过本地对局存档恢复，不依赖 Hub session。
 
 ## 3. 接入阿里云百炼语音
 
@@ -53,10 +53,10 @@ ALIYUN_TTS_MODEL=qwen-audio-3.1-tts-flash
 ALIYUN_TTS_VOICE=longanhuan_v3.1
 ```
 
-重新启动 Wolfcha。玩家按住麦克风录音，松开后由服务端调用百炼 ASR 并把文字放入输入框；九名 AI 居民的公开发言由 Wolfcha 服务端直接调用百炼 TTS，游戏内按原有音频队列播放。Hub 提供每个居民的音色 ID；种子数据为九人配置了不同的 `qwen-audio-3.1-tts-flash` 中文音色。未配置时不启用语音按钮和朗读。模型 ID、音色 ID 必须与所用百炼地域和模型相匹配；种子音色要求北京地域。
+重新启动 Wolfcha。玩家点击“语音输入”开始录音，再次点击停止；服务端调用百炼 ASR，并把识别文字放入输入框，玩家确认后点击“发送”。九名 AI 居民的公开发言由 Wolfcha 服务端直接调用百炼 TTS，按游戏音频队列播放。每个居民的 persona 配置独立音色 ID；未单独配置时按年龄、性别和性格选择默认音色。模型 ID、音色 ID 必须与所用百炼地域和模型相匹配。
 
-对局中，AI 的每次请求会带上当前角色可见的公开发言、票型和阶段信息。玩家公开发言还会作为事件写入 Hub 的居民记忆，供后续回合及下一局参考。夜间私密信息仍按角色权限隔离。
+对局中，AI 的每次请求会带上当前角色可见的公开发言、票型和阶段信息。事件可写入本机居民记忆；演示默认 `ZERONE_CROSS_GAME_MEMORY=0`，下一局不会读取上一局内容。夜间私密信息仍按角色权限隔离。
 
 ## 状态与边界
 
-服务接口与本地模拟响应可测试；真实对局需 Hub 已配置模型和服务密钥后验收。旧的 `OPENAI_COMPAT_*` 直连模式仍可通过将 `ZERONE_HUB_MODE=0` 使用，但不参与 Zerone 接入验收。
+服务接口与本地模拟响应只能用于开发测试；最终验收必须使用九个真实 Runtime Agent 和真实浏览器麦克风。旧 Hub 座位接口和 `OPENAI_COMPAT_*` 直连模式仍保留兼容，但不参与本次 Zerone Runtime 验收。

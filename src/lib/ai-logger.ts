@@ -199,7 +199,9 @@ class AILogger {
     }
     console.log("Duration:", `${entry.response.duration}ms`);
     if (entry.error) {
-      console.error("Error:", entry.error);
+      // Runtime failures belong in the activity panel; console.error makes
+      // Next.js dev mode hide the game behind its error overlay.
+      console.warn("Error:", entry.error);
     }
     console.groupEnd();
   }

@@ -50,6 +50,7 @@ const SYNC_DEBOUNCE_MS = 5000;
 const SESSION_READ_TIMEOUT_MS = 10_000;
 const SESSION_API_TIMEOUT_MS = 15_000;
 const AUTHORIZED_SESSION_ACTOR_ID = "authorized_session";
+const isDemoSessionTrackingDisabled = () => process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -174,6 +175,10 @@ export const gameSessionTracker = {
    * 在游戏开始时调用，创建数据库记录
    */
   async start(config: GameSessionConfig): Promise<string | null> {
+    if (isDemoSessionTrackingDisabled()) {
+      state = createInitialState();
+      return null;
+    }
     if (config.sessionId) {
       state = {
         ...createInitialState(),
@@ -353,6 +358,10 @@ export const gameSessionTracker = {
 
   /** 从持久化游戏状态恢复 tracker，保证刷新后继续使用同一 session。 */
   rehydrate(sessionId: string, startedAt: number): void {
+    if (isDemoSessionTrackingDisabled()) {
+      state = createInitialState();
+      return;
+    }
     if (!sessionId) return;
     state = {
       ...createInitialState(),

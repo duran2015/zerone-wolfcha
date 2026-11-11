@@ -13,8 +13,8 @@ export const GAME_CONFIG = {
   MAX_REVOTE_COUNT: 3,
   /** 警长竞选最大重投次数 */
   MAX_BADGE_REVOTE_COUNT: 2,
-  /** AI 投票的并发数；网关对单个 Key 的并发上限为 10，需给同时进行的其他对局留余量 */
-  AI_VOTE_CONCURRENCY: 5,
+  /** AI 投票的并发数；与 Zerone 演示链路的每批上限保持一致。 */
+  AI_VOTE_CONCURRENCY: 3,
 } as const;
 
 /** 延迟时间配置（毫秒） */

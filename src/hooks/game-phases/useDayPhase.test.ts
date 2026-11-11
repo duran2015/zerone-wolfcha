@@ -27,9 +27,12 @@ function harness(tts = false) {
   const cleanups: Array<() => void> = [];
   const flow = new AsyncFlowController();
   let serial = 0;
-  let organizingTimeout: (() => void) | undefined;
+  let nextSpeechSeat: number | null = null;
+  const scheduledTimeouts = new Map<number, Array<() => void>>();
   const scheduleTimeout = (fn: () => void, ms: number) => {
-    if (ms === 60000) organizingTimeout = fn;
+    const callbacks = scheduledTimeouts.get(ms) ?? [];
+    callbacks.push(fn);
+    scheduledTimeouts.set(ms, callbacks);
     return setTimeout(fn, ms);
   };
   const requireMock = (id: string): any => {
@@ -43,12 +46,13 @@ function harness(tts = false) {
     if (id === "next-intl") return { useTranslations: () => (key: string) => key };
     if (id === "@/store/game-machine") return { gameStateAtom: {} };
     if (id === "@/lib/game-master") return {
-      getSpeechContextKey: () => "prompt",
+      getSpeechContextKey: (snapshot: any) => snapshot.contextKey || "prompt",
+      addPlayerMessage: (snapshot: any) => snapshot,
       generateAISpeechSegmentsStream: (_state: any, _player: any, options: any) => {
         const waiting = deferred(); pending.push({ ...waiting, options }); return waiting.promise;
       },
     };
-    if (id === "@/lib/speech-order") return { getNextSpeechSeat: () => null };
+    if (id === "@/lib/speech-order") return { getNextSpeechSeat: () => nextSpeechSeat };
     if (id === "@/lib/game-constants") return { PHASE_CATEGORIES: { SPEECH_PHASES: ["DAY_SPEECH", "DAY_LAST_WORDS", "DAY_PK_SPEECH"] } };
     if (id === "@/lib/api-keys") return { getModelSource: () => "project" };
     if (id === "@/lib/audio-manager") return { makeAudioTaskId: () => "audio", audioManager: {
@@ -60,6 +64,12 @@ function harness(tts = false) {
     };
     if (id === "@/i18n/locale-store") return { getLocale: () => "zh" };
     if (id === "@/lib/llm") return { isGameSessionExpiredMessage: () => false };
+    if (id === "@/lib/demo-fix-metrics") return { recordDemoFixMetric: () => {} };
+    if (id === "../useDialogueManager") return {
+      prefetchCriteriaKey: (criteria: any) => JSON.stringify([
+        criteria.gameId, criteria.day, criteria.phase, criteria.playerId, criteria.contextKey,
+      ]),
+    };
     if (id === "@/lib/utils") return { generateUUID: () => `request-${++serial}` };
     if (id === "@/lib/speech-request") return speechRequest;
     if (id === "@/lib/request-timeout") return { withTimeout };
@@ -69,7 +79,7 @@ function harness(tts = false) {
     const source = readFileSync(file, "utf8");
     const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     const loadedModule = { exports: {} as any };
-    runInNewContext(`(function(require,module,exports){${code}\n})`, { setTimeout: scheduleTimeout, clearTimeout, AbortController, console, process: { env: { NEXT_PUBLIC_ALIYUN_VOICE_ENABLED: "1" } } })(requireMock, loadedModule, loadedModule.exports);
+    runInNewContext(`(function(require,module,exports){${code}\n})`, { setTimeout: scheduleTimeout, clearTimeout, setInterval, clearInterval, AbortController, AbortSignal, console, process: { env: { NEXT_PUBLIC_ALIYUN_VOICE_ENABLED: "1" } } })(requireMock, loadedModule, loadedModule.exports);
     return loadedModule.exports;
   };
   const dialogue = load("src/hooks/useDialogueManager.ts").useDialogueManager();
@@ -77,7 +87,8 @@ function harness(tts = false) {
     ...dialogue, getToken: () => flow.getToken(), isTokenValid: (token: any) => token.isValid(), setAfterLastWords: () => {},
   });
   return { first, second, pending, failures, audio, readiness, flow, day, dialogue,
-    timeout: () => organizingTimeout?.(),
+    timeout: (ms = 60_000, index = 0) => scheduledTimeouts.get(ms)?.[index]?.(),
+    setNextSpeechSeat(seat: number | null) { nextSpeechSeat = seat; },
     get state() { return state; }, setState(next: any) { state = next; },
     dispose() { cleanups.forEach((fn) => fn()); readiness.forEach((d) => d.resolve()); pending.forEach((p) => p.resolve([])); },
   };
@@ -166,6 +177,7 @@ test("首段已收到但 TTS 尚未就绪时超时，保留已生成字幕", asy
     h.pending[0].options.onSegmentReceived("等待语音的首段", 0);
     await tick();
     h.timeout();
+    h.pending[0].resolve(["等待语音的首段"]);
     await running;
     const queue = h.dialogue.getSpeechQueue();
     assert.deepEqual([...queue.segments], ["等待语音的首段"]);
@@ -183,16 +195,134 @@ test("发言恢复耗尽后停住推进，错误不作为角色台词，用户�
   try {
     const running = h.day.runAISpeech(h.state, h.first);
     h.pending[0].reject(new Error("公开发言格式恢复失败"));
+    await tick();
+    h.pending[1].reject(new Error("对冲发言格式恢复失败"));
     await running;
     assert.equal(h.day.isSpeechBlocked(), true);
     assert.deepEqual([...h.dialogue.getSpeechQueue().segments], []);
     assert.equal(h.failures.length, 1);
     h.failures[0].action.onClick();
-    assert.equal(h.pending.length, 2);
+    assert.equal(h.pending.length, 3);
     assert.equal(h.day.isSpeechBlocked(), false);
-    h.pending[1].options.onSegmentReceived("重试后的公开发言", 0);
-    h.pending[1].resolve(["重试后的公开发言"]);
+    h.pending[2].options.onSegmentReceived("重试后的公开发言", 0);
+    h.pending[2].resolve(["重试后的公开发言"]);
     await tick();
     assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["重试后的公开发言"]);
+  } finally { h.dispose(); }
+});
+
+test("第一次请求 75 秒才出第一段时不中断原请求，并终止落败对冲", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    assert.equal(h.pending.length, 1);
+    h.timeout(60_000);
+    await tick();
+    assert.equal(h.pending.length, 2);
+    assert.equal(h.pending[0].options.signal.aborted, false);
+    h.pending[0].options.onSegmentReceived("原请求第 75 秒返回", 0);
+    h.pending[0].resolve(["原请求第 75 秒返回"]);
+    await running;
+    assert.equal(h.pending[1].options.signal.aborted, true);
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["原请求第 75 秒返回"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("60 秒后对冲请求先返回时采用对冲结果并终止原请求", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.timeout(60_000);
+    await tick();
+    assert.equal(h.pending.length, 2);
+    h.pending[1].options.onSegmentReceived("对冲请求先返回", 0);
+    h.pending[1].resolve(["对冲请求先返回"]);
+    await running;
+    assert.equal(h.pending[0].options.signal.aborted, true);
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["对冲请求先返回"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("主请求先失败时立即启动对冲，并采用随后成功的对冲结果", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.pending[0].reject(new Error("Runtime returned HTTP 502"));
+    await tick();
+    assert.equal(h.pending.length, 2, "主请求失败后应立即启动对冲，而不是暂停发言");
+    h.pending[1].options.onSegmentReceived("对冲恢复成功", 0);
+    h.pending[1].resolve(["对冲恢复成功"]);
+    await running;
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["对冲恢复成功"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("对冲请求先失败时继续等待仍在运行的主请求", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.timeout(60_000);
+    await tick();
+    h.pending[1].reject(new Error("Runtime returned HTTP 429"));
+    await tick();
+    assert.equal(h.failures.length, 0, "单边失败不能暂停整句发言");
+    assert.equal(h.pending[0].options.signal.aborted, false);
+    h.pending[0].options.onSegmentReceived("主请求稍后成功", 0);
+    h.pending[0].resolve(["主请求稍后成功"]);
+    await running;
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["主请求稍后成功"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("120 秒两个请求都无首段时暂停，且不写固定台词", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.timeout(60_000);
+    await tick();
+    assert.equal(h.pending.length, 2);
+    h.timeout(120_000);
+    await running;
+    assert.equal(h.pending[0].options.signal.aborted, true);
+    assert.equal(h.pending[1].options.signal.aborted, true);
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], []);
+    assert.equal(h.failures.length, 1);
+    assert.equal(h.day.isSpeechBlocked(), true);
+  } finally { h.dispose(); }
+});
+
+test("同阶段不同公开上下文的在途预取互不覆盖，精确上下文仍可复用", async () => {
+  const h = harness();
+  try {
+    h.setNextSpeechSeat(1);
+    const stateA = { ...h.state, contextKey: "公开发言-A", speechRoundStartMessageIndex: 0 };
+    h.setState(stateA);
+    const speechA = h.day.runAISpeech(stateA, h.first);
+    h.pending[0].resolve([]);
+    await speechA;
+    assert.equal(h.pending.length, 2, "首轮完成后应开始下一位的预取");
+
+    const stateB = { ...stateA, contextKey: "公开发言-B", speechRoundStartMessageIndex: 10 };
+    h.setState(stateB);
+    const speechB = h.day.runAISpeech(stateB, h.first);
+    h.pending[2].resolve([]);
+    await speechB;
+    assert.equal(h.pending.length, 4, "同阶段的新公开上下文不能覆盖旧预取");
+    assert.equal(h.pending[1].options.signal.aborted, false);
+
+    h.pending[1].resolve(["上下文 A 的预取发言"]);
+    h.pending[3].resolve(["上下文 B 的预取发言"]);
+    await tick();
+
+    h.setNextSpeechSeat(null);
+    const secondAtA = { ...stateA, currentSpeakerSeat: 1 };
+    h.setState(secondAtA);
+    await h.day.runAISpeech(secondAtA, h.second);
+    assert.equal(h.pending.length, 4, "正式发言命中精确缓存后不应重新请求");
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["上下文 A 的预取发言"]);
   } finally { h.dispose(); }
 });

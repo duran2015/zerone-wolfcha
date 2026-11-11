@@ -2,6 +2,16 @@ import { randomUUID } from "node:crypto";
 import { publicAgentMemory } from "@/lib/zerone-agent-memory";
 import { zeroneRunAsChatStream } from "@/lib/zerone-agent-stream";
 
+export const ZERONE_SPEECH_TIMEOUT_MS = 120_000;
+export const ZERONE_VOTE_TIMEOUT_MS = 120_000;
+export const ZERONE_DECISION_TIMEOUT_MS = 90_000;
+
+export function zeroneAgentTimeoutMs(phase: string): number {
+  if (phase.includes("SPEECH") || phase === "DAY_LAST_WORDS") return ZERONE_SPEECH_TIMEOUT_MS;
+  if (phase.includes("VOTE") || phase.includes("ELECTION")) return ZERONE_VOTE_TIMEOUT_MS;
+  return ZERONE_DECISION_TIMEOUT_MS;
+}
+
 type RuntimeSeat = { name: string; url: string; apiKey: string };
 function runtimeSeats(): Record<string, RuntimeSeat> {
   try {
@@ -33,6 +43,17 @@ export function zeroneAgentRoster() {
 
 export function zeroneAgentSession() { return { sessionId: randomUUID() }; }
 
+type ZeroneAgentRequestInput = {
+  playerId: string;
+  sessionId: string;
+  seat: number;
+  characterId: string;
+  phase: string;
+  messages: unknown[];
+  stream: boolean;
+  signal?: AbortSignal;
+};
+
 function agentUrl(seat: RuntimeSeat): URL {
   const base = seat.url?.trim().replace(/\/$/, "");
   const agent = seat.name?.trim();
@@ -61,10 +82,10 @@ export async function isZeroneAgentReady(): Promise<boolean> {
   } catch { return false; }
 }
 
-export async function requestZeroneAgent(input: {
-  playerId: string; sessionId: string; seat: number; characterId: string; phase: string; messages: unknown[]; stream: boolean;
-  signal?: AbortSignal;
-}): Promise<Response> {
+export async function createZeroneAgentRunRequest(input: ZeroneAgentRequestInput): Promise<{
+  url: string;
+  init: RequestInit;
+}> {
   const resident = residents.find(([id]) => id === input.characterId);
   const runtime = runtimeSeats()[input.characterId];
   if (!runtime?.apiKey) throw new Error("Zerone resident Agent is not configured");
@@ -77,20 +98,33 @@ export async function requestZeroneAgent(input: {
       (input.phase.includes("SPEECH") || input.phase === "DAY_LAST_WORDS"
         ? " 发言聚焦一两条关键证据，最多三句、120 个汉字；不要逐个点评所有玩家。"
         : ""),
-    publicMemory: await publicAgentMemory(input.playerId),
+    publicMemory: process.env.ZERONE_CROSS_GAME_MEMORY === "1" ? await publicAgentMemory(input.playerId) : [],
     messages: input.messages,
   });
-  const upstream = await fetch(`${agentUrl(runtime)}/runs`, {
-    method: "POST", headers: { "x-api-key": runtime.apiKey, "Content-Type": "application/json", Accept: input.stream ? "text/event-stream" : "application/json" },
-    // Wolfcha already supplies the role's visible game history in `messages`.
-    // Reusing a Runtime session would append previous full snapshots again on every turn.
-    body: JSON.stringify({ message, stream: input.stream }),
-    // Cancel Runtime generation when the browser abandons a prefetch or times out.
-    signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
-    cache: "no-store",
-  });
+  return {
+    url: `${agentUrl(runtime)}/runs`,
+    init: {
+      method: "POST", headers: { "x-api-key": runtime.apiKey, "Content-Type": "application/json", Accept: input.stream ? "text/event-stream" : "application/json" },
+      // Wolfcha already supplies the role's visible game history in `messages`.
+      // Reusing a Runtime session would append previous full snapshots again on every turn.
+      body: JSON.stringify({ message, stream: input.stream }),
+      // Cancel Runtime generation when the browser abandons a prefetch or times out.
+      signal: input.signal
+        ? AbortSignal.any([input.signal, AbortSignal.timeout(zeroneAgentTimeoutMs(input.phase))])
+        : AbortSignal.timeout(zeroneAgentTimeoutMs(input.phase)),
+      cache: "no-store",
+    },
+  };
+}
+
+export async function requestZeroneAgent(input: ZeroneAgentRequestInput): Promise<Response> {
+  const request = await createZeroneAgentRunRequest(input);
+  const upstream = await fetch(request.url, request.init);
   if (!upstream.ok) return new Response(JSON.stringify({ error: `Zerone Agent returned HTTP ${upstream.status}` }), {
-    status: upstream.status, headers: { "Content-Type": "application/json" },
+    status: upstream.status, headers: {
+      "Content-Type": "application/json",
+      ...(upstream.headers.get("retry-after") ? { "Retry-After": upstream.headers.get("retry-after")! } : {}),
+    },
   });
   if (input.stream) return zeroneRunAsChatStream(upstream, () => {});
   const result: unknown = await upstream.json();

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isZeroneAgentConfigured, requestZeroneAgent, zeroneAgentRoster } from "./zerone-agent-server";
+import {
+  isZeroneAgentConfigured,
+  requestZeroneAgent,
+  zeroneAgentRoster,
+  zeroneAgentTimeoutMs,
+} from "./zerone-agent-server";
 import { zeroneResidentMind, zeroneResidentVoiceRate } from "./zerone-resident-minds";
 
 test("九位 Zerone 居民有各自稳定的记忆和推理风格", () => {
@@ -75,6 +80,31 @@ test("取消浏览器请求会同步取消 Zerone Runtime 请求", async () => {
     };
     await assert.rejects(requestZeroneAgent({ playerId: "guest_testplayer123", sessionId: "test", seat: 1,
       characterId: "zhou", phase: "DAY_SPEECH", messages: [], stream: true, signal: controller.signal }), /cancelled/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (original === undefined) delete process.env.ZERONE_AGENTS_JSON;
+    else process.env.ZERONE_AGENTS_JSON = original;
+  }
+});
+
+test("Zerone Agent 超时按发言、投票和其他决策集中配置", () => {
+  assert.equal(zeroneAgentTimeoutMs("DAY_SPEECH"), 120_000);
+  assert.equal(zeroneAgentTimeoutMs("DAY_BADGE_ELECTION"), 120_000);
+  assert.equal(zeroneAgentTimeoutMs("DAY_VOTE"), 120_000);
+  assert.equal(zeroneAgentTimeoutMs("WOLF_ACTION"), 90_000);
+  assert.equal(zeroneAgentTimeoutMs("SEER_ACTION"), 90_000);
+});
+
+test("Runtime 真返回 502 时 requestZeroneAgent 透传 502", async () => {
+  const original = process.env.ZERONE_AGENTS_JSON;
+  const originalFetch = globalThis.fetch;
+  try {
+    process.env.ZERONE_AGENTS_JSON = JSON.stringify({ zhou: { name: "wolfcha-zhou", url: "https://agents.example.test", apiKey: "secret" } });
+    globalThis.fetch = async () => new Response("bad gateway", { status: 502 });
+    const response = await requestZeroneAgent({ playerId: "guest_testplayer123", sessionId: "test", seat: 1,
+      characterId: "zhou", phase: "DAY_VOTE", messages: [], stream: false });
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /returned HTTP 502/);
   } finally {
     globalThis.fetch = originalFetch;
     if (original === undefined) delete process.env.ZERONE_AGENTS_JSON;

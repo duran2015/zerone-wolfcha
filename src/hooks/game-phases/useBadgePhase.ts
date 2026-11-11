@@ -304,7 +304,9 @@ export function useBadgePhase(
     }
 
     const task = (async (): Promise<GameState> => {
-      const baseState = gameStateRef.current ?? state;
+      // The parent hook may still hold DAY_START until React commits the
+      // signup transition. Never restore that older phase after AI replies.
+      const baseState = gameStateRef.current?.phase === state.phase ? gameStateRef.current : state;
       const alivePlayers = baseState.players.filter((p) => p.alive);
       const aiPlayers = alivePlayers.filter((p) => !p.isHuman);
       const pendingAI = aiPlayers.filter(
@@ -324,7 +326,7 @@ export function useBadgePhase(
       setIsWaitingForAI(true);
       try {
         const results = await generateAIBadgeSignupBatch(baseState, pendingAI);
-        const latestState = gameStateRef.current ?? baseState;
+        const latestState = gameStateRef.current?.phase === state.phase ? gameStateRef.current : baseState;
         const mergedSignup = {
           ...latestState.badge.signup,
           ...baseState.badge.signup,

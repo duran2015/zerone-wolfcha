@@ -8,9 +8,10 @@ export async function POST(request: Request) {
   const body: unknown = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid session request" }, { status: 400 });
   const input = body as { playerName?: unknown; seats?: unknown };
-  if (typeof input.playerName !== "string" || !Array.isArray(input.seats) || input.seats.length !== 9 ||
+  const allowedSeatCounts = process.env.ZERONE_DEMO_MODE === "1" ? [7, 8, 9] : [9];
+  if (typeof input.playerName !== "string" || !Array.isArray(input.seats) || !allowedSeatCounts.includes(input.seats.length) ||
       !input.seats.every((seat) => seat && Number.isInteger(seat.seat) && typeof seat.characterId === "string")) {
-    return NextResponse.json({ error: "Nine AI seats are required" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid AI seat count" }, { status: 400 });
   }
   if (isZeroneAgentConfigured()) return NextResponse.json(zeroneAgentSession(), { status: 201 });
   try {

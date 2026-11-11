@@ -12,6 +12,7 @@ export interface ZeroneResident {
 type SeatBinding = { seat: number; characterId: string };
 type ZeroneGameSession = { sessionId: string; seats: SeatBinding[] };
 const STORAGE_KEY = "wolfcha_zerone_game_session";
+const residentNames: Record<string, string> = { zhou: "老周", zhen: "阿珍", lin: "小林", chen: "陈伯", meimei: "美美", jie: "阿杰", xiaoyu: "小雨", laowu: "老吴", tang: "唐姐" };
 let currentSession: ZeroneGameSession | null = null;
 const sentEvents = new Set<number>();
 let syncingEvents = false;
@@ -19,6 +20,14 @@ let pendingEventState: GameState | null = null;
 
 export function isZeroneGameEnabled(): boolean {
   return process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1";
+}
+
+export function zeroneSeatLabel(seat: number): string {
+  if (!currentSession && typeof localStorage !== "undefined") {
+    try { currentSession = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") as ZeroneGameSession | null; } catch { /* no session */ }
+  }
+  const characterId = currentSession?.seats.find((item) => item.seat === seat)?.characterId;
+  return `${seat + 1}号${characterId ? ` ${residentNames[characterId] || characterId}` : ""}`;
 }
 
 export async function loadZeroneRoster(): Promise<ZeroneResident[]> {
@@ -107,7 +116,7 @@ export function zeroneRequestContext(seat?: number, phase?: string): { headers: 
   if (!currentSession && typeof localStorage !== "undefined") {
     try { currentSession = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") as ZeroneGameSession | null; } catch { /* no session */ }
   }
-  const binding = currentSession?.seats.find((item) => item.seat === seat) ?? currentSession?.seats[0];
+  const binding = currentSession?.seats.find((item) => item.seat === seat);
   if (!currentSession || !binding) throw new Error("Zerone 对局尚未创建");
   return {
     headers: { "X-Zerone-Session-Id": currentSession.sessionId, "X-Zerone-Seat": String(binding.seat),
