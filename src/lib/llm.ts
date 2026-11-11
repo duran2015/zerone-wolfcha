@@ -23,6 +23,7 @@ import { generateUUID } from "./utils";
 import { withTimeout } from "@/lib/request-timeout";
 import { isZeroneGameEnabled, zeroneRequestContext, zeroneSeatLabel } from "@/lib/zerone-game";
 import { finishAiActivity, startAiActivity } from "@/lib/ai-activity";
+import { zeroneAttemptLimit } from "@/lib/zerone-retry-policy";
 import type { PromptScope } from "@/lib/deepseek-prompt-scope";
 import { resolveReasoning, type ReasoningProfile } from "@/lib/reasoning-profile";
 
@@ -397,8 +398,9 @@ async function fetchWithRetry(
 ): Promise<Response> {
   let lastResponse: Response | null = null;
   let lastError: unknown = null;
-  const tracked = isZeroneGameEnabled() && String(input).includes("/api/chat") && !/"requests"\s*:/.test(String(init.body || ""));
-  const attemptLimit = isZeroneGameEnabled() && String(input).includes("/api/chat") ? 1 : maxAttempts;
+  const isZeroneRequest = isZeroneGameEnabled() && String(input).includes("/api/chat");
+  const batch = /"requests"\s*:/.test(String(init.body || ""));
+  const tracked = isZeroneRequest && !batch;
   let streaming = false;
   if (tracked) {
     const headers = new Headers(init.headers);
@@ -414,6 +416,7 @@ async function fetchWithRetry(
     } catch { /* only metadata is needed */ }
     startAiActivity(logicalRequestId, label, phase);
   }
+  const attemptLimit = zeroneAttemptLimit(isZeroneRequest, streaming, maxAttempts, batch);
 
   for (let attempt = 1; attempt <= attemptLimit; attempt++) {
     if (init.signal?.aborted) finishAiActivity(logicalRequestId, "error", "请求已取消");
@@ -447,6 +450,7 @@ async function fetchWithRetry(
       const backoffMs =
         (retryAfterMs !== null ? Math.min(15000, Math.max(0, retryAfterMs)) : base * 2 ** (attempt - 1)) +
         jitter;
+      await response.body?.cancel().catch(() => undefined);
       await sleep(backoffMs);
     } catch (err) {
       if (init.signal?.aborted && tracked) finishAiActivity(logicalRequestId, "error", "请求已取消");

@@ -121,7 +121,10 @@ export async function requestZeroneAgent(input: ZeroneAgentRequestInput): Promis
   const request = await createZeroneAgentRunRequest(input);
   const upstream = await fetch(request.url, request.init);
   if (!upstream.ok) return new Response(JSON.stringify({ error: `Zerone Agent returned HTTP ${upstream.status}` }), {
-    status: upstream.status, headers: { "Content-Type": "application/json" },
+    status: upstream.status, headers: {
+      "Content-Type": "application/json",
+      ...(upstream.headers.get("retry-after") ? { "Retry-After": upstream.headers.get("retry-after")! } : {}),
+    },
   });
   if (input.stream) return zeroneRunAsChatStream(upstream, () => {});
   const result: unknown = await upstream.json();

@@ -15,7 +15,7 @@
 
 - **Before：** 预取会因消息数变化被取消重开；超时写入固定台词；天亮恢复可能重复启动；真人语音还需手工点击两次；活动面板遮挡或混入上一局记录。
 - **After：** Wolfcha 超时明确返回 504，上游 HTTP 状态原样透传；投票最长等 120 秒、其他决策至少 90 秒；发言 60 秒无首段时发起不中断原请求的并行对冲。真实 Chrome 8 人复测已公布第一天放逐结果，全程无超时、失败或人工恢复。
-- **自动门禁：** `test:single-player-context` 268/268、`test:demo-fix` 23/23、`tsc --noEmit`、`next build --webpack` 全部通过。
+- **自动门禁：** `test:single-player-context` 269/269、`test:demo-fix` 28/28、`tsc --noEmit`、`next build --webpack` 全部通过。
 
 ## 本轮审查修复
 
@@ -31,6 +31,12 @@
 - **Before：** 主请求或对冲任一方 reject 都会调用同一个 `rejectWinner`，另一方即使仍在正常生成也会被整句失败打断；同时 Zerone Runtime 的非文字事件被流转换层丢弃，浏览器可能在对冲启动前先触发 45 秒空闲超时。
 - **After：** `useDayPhase.ts` 分别记录主请求和对冲的失败状态。主请求先失败会立即启动对冲，对冲先失败则继续等待主请求；只有两方都失败或总预算 120 秒用尽才暂停。`zerone-agent-stream.ts` 每 15 秒发送 SSE 注释心跳，并在收到 Runtime 非文字事件时同步发心跳，使浏览器空闲超时只识别真正无数据的死连接。
 - **回归测试：** 新增“主请求先失败、对冲成功”“对冲先失败、主请求成功”“无文字时周期心跳”“非文字 Runtime 事件刷新流”四种路径；测试在修改前可稳定复现暂停/挂起，修改后全部通过。
+
+### 本地实测发现的警徽投票 429
+
+- **现场证据：** 8 人局警徽投票同时发出 5 个独立 Agent 请求，座位 1、4、5、6、7 均在约 0.5–0.8 秒内收到 Runtime HTTP 429；旧逻辑把失败票当作弃票并进入错误的平票 PK，同时 `console.error` 触发 Next.js 开发错误覆盖层。
+- **修复：** `GAME_CONFIG.AI_VOTE_CONCURRENCY` 从 5 调整为 3；Zerone 非流式决策允许对同一个 Agent 重试 429/5xx，并透传 Runtime 的 `Retry-After`，流式发言仍只由对冲处理；AI 日志错误改用 `console.warn`，活动面板仍保留红色失败记录，但不再遮挡游戏界面。没有接入备用模型。
+- **限制：** 发生 429 的旧对局已经把票记为弃票，不能安全回写，必须新开一局验证修复后的真实投票结果。
 
 ## Merge Danger
 
@@ -118,8 +124,8 @@ pnpm dev
 
 | 命令 | 结果 |
 |---|---|
-| `pnpm run test:demo-fix` | **通过**，23/23 |
-| `pnpm run test:single-player-context` | **通过**，268/268 |
+| `pnpm run test:demo-fix` | **通过**，28/28 |
+| `pnpm run test:single-player-context` | **通过**，269/269 |
 | `pnpm exec tsc --noEmit` | **通过**，退出码 0 |
 | `pnpm run build` | **通过**，production build 与 65 个静态页面生成完成 |
 

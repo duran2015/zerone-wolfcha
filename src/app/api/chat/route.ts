@@ -825,6 +825,7 @@ export async function POST(request: NextRequest) {
           return new Response(upstream.body, { status: upstream.status,
             headers: {
               "Content-Type": upstream.headers.get("content-type") || (body.stream ? "text/event-stream" : "application/json"),
+              ...(upstream.headers.get("retry-after") ? { "Retry-After": upstream.headers.get("retry-after")! } : {}),
               ...(runtimeError ? { "X-Zerone-Error-Type": "runtime_http", "X-Zerone-Error-Detail": runtimeError } : {}),
             } });
         } catch (error) {
