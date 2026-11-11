@@ -195,15 +195,17 @@ test("发言恢复耗尽后停住推进，错误不作为角色台词，用户�
   try {
     const running = h.day.runAISpeech(h.state, h.first);
     h.pending[0].reject(new Error("公开发言格式恢复失败"));
+    await tick();
+    h.pending[1].reject(new Error("对冲发言格式恢复失败"));
     await running;
     assert.equal(h.day.isSpeechBlocked(), true);
     assert.deepEqual([...h.dialogue.getSpeechQueue().segments], []);
     assert.equal(h.failures.length, 1);
     h.failures[0].action.onClick();
-    assert.equal(h.pending.length, 2);
+    assert.equal(h.pending.length, 3);
     assert.equal(h.day.isSpeechBlocked(), false);
-    h.pending[1].options.onSegmentReceived("重试后的公开发言", 0);
-    h.pending[1].resolve(["重试后的公开发言"]);
+    h.pending[2].options.onSegmentReceived("重试后的公开发言", 0);
+    h.pending[2].resolve(["重试后的公开发言"]);
     await tick();
     assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["重试后的公开发言"]);
   } finally { h.dispose(); }
@@ -239,6 +241,39 @@ test("60 秒后对冲请求先返回时采用对冲结果并终止原请求", as
     await running;
     assert.equal(h.pending[0].options.signal.aborted, true);
     assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["对冲请求先返回"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("主请求先失败时立即启动对冲，并采用随后成功的对冲结果", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.pending[0].reject(new Error("Runtime returned HTTP 502"));
+    await tick();
+    assert.equal(h.pending.length, 2, "主请求失败后应立即启动对冲，而不是暂停发言");
+    h.pending[1].options.onSegmentReceived("对冲恢复成功", 0);
+    h.pending[1].resolve(["对冲恢复成功"]);
+    await running;
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["对冲恢复成功"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("对冲请求先失败时继续等待仍在运行的主请求", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.timeout(60_000);
+    await tick();
+    h.pending[1].reject(new Error("Runtime returned HTTP 429"));
+    await tick();
+    assert.equal(h.failures.length, 0, "单边失败不能暂停整句发言");
+    assert.equal(h.pending[0].options.signal.aborted, false);
+    h.pending[0].options.onSegmentReceived("主请求稍后成功", 0);
+    h.pending[0].resolve(["主请求稍后成功"]);
+    await running;
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["主请求稍后成功"]);
     assert.equal(h.failures.length, 0);
   } finally { h.dispose(); }
 });

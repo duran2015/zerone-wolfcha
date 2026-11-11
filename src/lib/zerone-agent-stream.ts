@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 /** Convert Zerone Runtime SSE text deltas to the OpenAI SSE format used by Wolfcha. */
-export function zeroneRunAsChatStream(upstream: Response, onSession: (sessionId: string) => void): Response {
+export function zeroneRunAsChatStream(
+  upstream: Response,
+  onSession: (sessionId: string) => void,
+  heartbeatMs = 15_000,
+): Response {
   if (!upstream.body) return Response.json({ error: "Zerone Agent returned no stream" }, { status: 502 });
   const reader = upstream.body.getReader();
   const encoder = new TextEncoder();
@@ -11,7 +15,13 @@ export function zeroneRunAsChatStream(upstream: Response, onSession: (sessionId:
 
   const output = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (value: string) => controller.enqueue(encoder.encode(value));
+      let cancelled = false;
+      const send = (value: string) => {
+        if (cancelled) return;
+        try { controller.enqueue(encoder.encode(value)); } catch { cancelled = true; }
+      };
+      const sendHeartbeat = () => send(": ping\n\n");
+      const heartbeat = setInterval(sendHeartbeat, heartbeatMs);
       const sendText = (content: string) => {
         if (!content) return;
         sentText = true;
@@ -23,6 +33,10 @@ export function zeroneRunAsChatStream(upstream: Response, onSession: (sessionId:
         if (!data) return;
         let value: Record<string, unknown>;
         try { value = JSON.parse(data); } catch { return; }
+        // Runtime can emit status/tool events for a long time before the first text.
+        // Forward a comment so the browser's idle timeout measures a dead connection,
+        // not a healthy Agent that is still reasoning.
+        sendHeartbeat();
         if (event === "system" && typeof value.sessionId === "string") onSession(value.sessionId);
         if (event === "partial_message") {
           const partial = value.partial && typeof value.partial === "object" ? value.partial as Record<string, unknown> : null;
@@ -55,6 +69,7 @@ export function zeroneRunAsChatStream(upstream: Response, onSession: (sessionId:
       } catch {
         send(`data: ${JSON.stringify({ error: { message: "Zerone Agent 连接中断" } })}\n\n`);
       } finally {
+        clearInterval(heartbeat);
         send(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
         send("data: [DONE]\n\n");
         controller.close();

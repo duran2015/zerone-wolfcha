@@ -248,6 +248,9 @@ export function useDayPhase(
         let hedgeStream: Promise<unknown> | null = null;
         let resolveWinner!: (source: Source) => void;
         let rejectWinner!: (error: unknown) => void;
+        let primaryFailed = false;
+        let hedgeFailed = false;
+        let startHedge!: () => void;
         const winnerReady = new Promise<Source>((resolve, reject) => { resolveWinner = resolve; rejectWinner = reject; });
         const abortPrimary = () => {
           if (matchingPending) matchingPending.controller.abort();
@@ -284,13 +287,23 @@ export function useDayPhase(
               finally { matchingPending.listeners.delete(listener); }
             })()
           : startDirectStream("primary", primaryController);
-        const startHedge = () => {
+        const handleFailure = (source: Source, error: unknown) => {
+          if (winner) return;
+          if (source === "primary") {
+            primaryFailed = true;
+            startHedge();
+          } else {
+            hedgeFailed = true;
+          }
+          if (primaryFailed && hedgeFailed) rejectWinner(error);
+        };
+        startHedge = () => {
           if (winner || !isValid() || hedgeStream) return;
           recordDemoFixMetric(state.gameId, "retries");
           hedgeStream = startDirectStream("hedge", hedgeController);
-          void hedgeStream.then(() => claimCompletion("hedge"), rejectWinner);
+          void hedgeStream.then(() => claimCompletion("hedge"), (error) => handleFailure("hedge", error));
         };
-        void primaryStream.then(() => claimCompletion("primary"), rejectWinner);
+        void primaryStream.then(() => claimCompletion("primary"), (error) => handleFailure("primary", error));
         hedgeTimeoutId = setTimeout(startHedge, hedgeDelay);
         const hardTimeout = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => {

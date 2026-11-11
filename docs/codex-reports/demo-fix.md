@@ -15,7 +15,7 @@
 
 - **Before：** 预取会因消息数变化被取消重开；超时写入固定台词；天亮恢复可能重复启动；真人语音还需手工点击两次；活动面板遮挡或混入上一局记录。
 - **After：** Wolfcha 超时明确返回 504，上游 HTTP 状态原样透传；投票最长等 120 秒、其他决策至少 90 秒；发言 60 秒无首段时发起不中断原请求的并行对冲。真实 Chrome 8 人复测已公布第一天放逐结果，全程无超时、失败或人工恢复。
-- **自动门禁：** `test:single-player-context` 266/266、`test:demo-fix` 19/19、`tsc --noEmit`、`next build --webpack` 全部通过。
+- **自动门禁：** `test:single-player-context` 268/268、`test:demo-fix` 23/23、`tsc --noEmit`、`next build --webpack` 全部通过。
 
 ## 本轮审查修复
 
@@ -25,6 +25,12 @@
 4. `scripts/zerone-runtime-latency.ts`：按与生产相同的 `/runs` 请求构造直连一个 Agent 15 次，记录 HTTP、首字节、首段和总耗时，且不输出密钥。
 
 新增测试覆盖：45 秒 Wolfcha 超时为 504、上游 502 透传；原请求 75 秒才出首段仍成功；60 秒后的对冲先返回时采用对冲；120 秒均无结果时暂停且不写固定台词；并行对冲的活动记录不会被败方取消误标失败。
+
+### Claude 二次审查后的 P1 修复
+
+- **Before：** 主请求或对冲任一方 reject 都会调用同一个 `rejectWinner`，另一方即使仍在正常生成也会被整句失败打断；同时 Zerone Runtime 的非文字事件被流转换层丢弃，浏览器可能在对冲启动前先触发 45 秒空闲超时。
+- **After：** `useDayPhase.ts` 分别记录主请求和对冲的失败状态。主请求先失败会立即启动对冲，对冲先失败则继续等待主请求；只有两方都失败或总预算 120 秒用尽才暂停。`zerone-agent-stream.ts` 每 15 秒发送 SSE 注释心跳，并在收到 Runtime 非文字事件时同步发心跳，使浏览器空闲超时只识别真正无数据的死连接。
+- **回归测试：** 新增“主请求先失败、对冲成功”“对冲先失败、主请求成功”“无文字时周期心跳”“非文字 Runtime 事件刷新流”四种路径；测试在修改前可稳定复现暂停/挂起，修改后全部通过。
 
 ## Merge Danger
 
@@ -112,8 +118,8 @@ pnpm dev
 
 | 命令 | 结果 |
 |---|---|
-| `pnpm run test:demo-fix` | **通过**，19/19 |
-| `pnpm run test:single-player-context` | **通过**，266/266 |
+| `pnpm run test:demo-fix` | **通过**，23/23 |
+| `pnpm run test:single-player-context` | **通过**，268/268 |
 | `pnpm exec tsc --noEmit` | **通过**，退出码 0 |
 | `pnpm run build` | **通过**，production build 与 65 个静态页面生成完成 |
 
