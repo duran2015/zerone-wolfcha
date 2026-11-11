@@ -28,9 +28,11 @@ function harness(tts = false) {
   const flow = new AsyncFlowController();
   let serial = 0;
   let nextSpeechSeat: number | null = null;
-  let organizingTimeout: (() => void) | undefined;
+  const scheduledTimeouts = new Map<number, Array<() => void>>();
   const scheduleTimeout = (fn: () => void, ms: number) => {
-    if (ms === 60000) organizingTimeout = fn;
+    const callbacks = scheduledTimeouts.get(ms) ?? [];
+    callbacks.push(fn);
+    scheduledTimeouts.set(ms, callbacks);
     return setTimeout(fn, ms);
   };
   const requireMock = (id: string): any => {
@@ -85,7 +87,7 @@ function harness(tts = false) {
     ...dialogue, getToken: () => flow.getToken(), isTokenValid: (token: any) => token.isValid(), setAfterLastWords: () => {},
   });
   return { first, second, pending, failures, audio, readiness, flow, day, dialogue,
-    timeout: () => organizingTimeout?.(),
+    timeout: (ms = 60_000, index = 0) => scheduledTimeouts.get(ms)?.[index]?.(),
     setNextSpeechSeat(seat: number | null) { nextSpeechSeat = seat; },
     get state() { return state; }, setState(next: any) { state = next; },
     dispose() { cleanups.forEach((fn) => fn()); readiness.forEach((d) => d.resolve()); pending.forEach((p) => p.resolve([])); },
@@ -207,20 +209,54 @@ test("发言恢复耗尽后停住推进，错误不作为角色台词，用户�
   } finally { h.dispose(); }
 });
 
-test("首请求超时自动重试一次，固定超时文案不会进入居民发言", async () => {
+test("第一次请求 75 秒才出第一段时不中断原请求，并终止落败对冲", async () => {
   const h = harness();
   try {
     const running = h.day.runAISpeech(h.state, h.first);
     assert.equal(h.pending.length, 1);
-    h.timeout();
+    h.timeout(60_000);
     await tick();
     assert.equal(h.pending.length, 2);
-    assert.equal(h.pending[0].options.signal.aborted, true);
-    h.pending[1].options.onSegmentReceived("Agent 重试后的发言", 0);
-    h.pending[1].resolve(["Agent 重试后的发言"]);
+    assert.equal(h.pending[0].options.signal.aborted, false);
+    h.pending[0].options.onSegmentReceived("原请求第 75 秒返回", 0);
+    h.pending[0].resolve(["原请求第 75 秒返回"]);
     await running;
-    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["Agent 重试后的发言"]);
+    assert.equal(h.pending[1].options.signal.aborted, true);
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["原请求第 75 秒返回"]);
     assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("60 秒后对冲请求先返回时采用对冲结果并终止原请求", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.timeout(60_000);
+    await tick();
+    assert.equal(h.pending.length, 2);
+    h.pending[1].options.onSegmentReceived("对冲请求先返回", 0);
+    h.pending[1].resolve(["对冲请求先返回"]);
+    await running;
+    assert.equal(h.pending[0].options.signal.aborted, true);
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], ["对冲请求先返回"]);
+    assert.equal(h.failures.length, 0);
+  } finally { h.dispose(); }
+});
+
+test("120 秒两个请求都无首段时暂停，且不写固定台词", async () => {
+  const h = harness();
+  try {
+    const running = h.day.runAISpeech(h.state, h.first);
+    h.timeout(60_000);
+    await tick();
+    assert.equal(h.pending.length, 2);
+    h.timeout(120_000);
+    await running;
+    assert.equal(h.pending[0].options.signal.aborted, true);
+    assert.equal(h.pending[1].options.signal.aborted, true);
+    assert.deepEqual([...h.dialogue.getSpeechQueue().segments], []);
+    assert.equal(h.failures.length, 1);
+    assert.equal(h.day.isSpeechBlocked(), true);
   } finally { h.dispose(); }
 });
 

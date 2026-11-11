@@ -25,6 +25,18 @@ test("同一逻辑发言的自动重试合并为一条活动记录", () => {
     assert.equal(records[0].status, "success");
     assert.equal(records[0].retryCount, 1);
     assert.equal(records[0].detail, "流式完成");
+
+    const hedgeId = "speech:game:1:DAY_SPEECH:p6:0";
+    startAiActivity(hedgeId, "6号 陈伯", "DAY_SPEECH");
+    startAiActivity(hedgeId, "6号 陈伯", "DAY_SPEECH");
+    finishAiActivity(hedgeId, "error", "请求已取消");
+    let hedgeRecord = getAiActivities().find((item) => item.id === hedgeId);
+    assert.equal(hedgeRecord?.status, "running");
+    finishAiActivity(hedgeId, "success", "流式完成");
+    hedgeRecord = getAiActivities().find((item) => item.id === hedgeId);
+    assert.equal(hedgeRecord?.status, "success");
+    assert.equal(hedgeRecord?.retryCount, 1);
+    assert.equal(hedgeRecord?.detail, "流式完成");
   } finally {
     if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
     else delete (globalThis as { window?: unknown }).window;

@@ -48,6 +48,7 @@ type PendingSpeechPrefetch = {
   promise: Promise<string[]>;
   segments: string[];
   listeners: Set<(segment: string, index: number) => void>;
+  startedAt: number;
 };
 
 const samePrefetchScope = (left: PrefetchCriteria, right: Pick<PrefetchCriteria, "gameId" | "day" | "phase">) =>
@@ -136,7 +137,8 @@ export function useDayPhase(
     const token = getToken();
     const isValid = () => !controller.signal.aborted && token.isValid() &&
       pendingPrefetchesRef.current.get(key)?.controller === controller && store.get(gameStateAtom).gameId === state.gameId;
-    const pending = { criteria, controller, promise: Promise.resolve([] as string[]), segments: [] as string[], listeners: new Set<(segment: string, index: number) => void>() };
+    const pending = { criteria, controller, promise: Promise.resolve([] as string[]), segments: [] as string[],
+      listeners: new Set<(segment: string, index: number) => void>(), startedAt: base.createdAt };
     pendingPrefetchesRef.current.set(key, pending);
     const promise = generateAISpeechSegmentsStream(state, player, { signal: controller.signal,
       activityId: speechActivityId(state, player),
@@ -189,6 +191,7 @@ export function useDayPhase(
     const collected: string[] = [];
     let displayChain = Promise.resolve();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let hedgeTimeoutId: ReturnType<typeof setTimeout> | undefined;
     const startedAt = Date.now();
     const thinkingTimer = setInterval(() => {
       if (isValid() && collected.length === 0) setDialogue(`${player.seat + 1}号 · ${player.displayName} · Zerone Agent`, `仍在思考（已用 ${Math.floor((Date.now() - startedAt) / 1000)} 秒）`, true);
@@ -231,48 +234,76 @@ export function useDayPhase(
     setDialogue(player.displayName, t("dayPhase.organizing"), true);
 
     try {
-      const firstAttempt = new AbortController();
-      const firstStream = prefetched
-        ? Promise.resolve(prefetched.forEach(appendSegment))
-        : matchingPending
+      if (prefetched) {
+        prefetched.forEach(appendSegment);
+      } else {
+        type Source = "primary" | "hedge";
+        const primaryController = new AbortController();
+        const hedgeController = new AbortController();
+        const primaryStartedAt = matchingPending?.startedAt ?? Date.now();
+        const elapsedBeforeFormalTurn = Math.max(0, Date.now() - primaryStartedAt);
+        const hedgeDelay = Math.max(0, 60_000 - elapsedBeforeFormalTurn);
+        const hardDelay = Math.max(0, 120_000 - elapsedBeforeFormalTurn);
+        let winner: Source | null = null;
+        let hedgeStream: Promise<unknown> | null = null;
+        let resolveWinner!: (source: Source) => void;
+        let rejectWinner!: (error: unknown) => void;
+        const winnerReady = new Promise<Source>((resolve, reject) => { resolveWinner = resolve; rejectWinner = reject; });
+        const abortPrimary = () => {
+          if (matchingPending) matchingPending.controller.abort();
+          else primaryController.abort();
+        };
+        const claimAndAppend = (source: Source, segment: string, index: number) => {
+          if (!winner) {
+            winner = source;
+            if (source === "primary") hedgeController.abort();
+            else abortPrimary();
+            resolveWinner(source);
+          }
+          if (winner === source) appendSegment(segment, index);
+        };
+        const claimCompletion = (source: Source) => {
+          if (winner) return;
+          winner = source;
+          if (source === "primary") hedgeController.abort();
+          else abortPrimary();
+          resolveWinner(source);
+        };
+        const startDirectStream = (source: Source, sourceController: AbortController) =>
+          generateAISpeechSegmentsStream(state, player, {
+            signal: AbortSignal.any([controller.signal, sourceController.signal]),
+            activityId: speechActivityId(state, player),
+            onSegmentReceived: (segment, index) => claimAndAppend(source, segment, index),
+          });
+        const primaryStream: Promise<unknown> = matchingPending
           ? (async () => {
-              matchingPending.listeners.add(appendSegment);
-              matchingPending.segments.forEach(appendSegment);
+              const listener = (segment: string, index: number) => claimAndAppend("primary", segment, index);
+              matchingPending.listeners.add(listener);
+              matchingPending.segments.forEach(listener);
               try { await matchingPending.promise; }
-              finally { matchingPending.listeners.delete(appendSegment); }
+              finally { matchingPending.listeners.delete(listener); }
             })()
-        : generateAISpeechSegmentsStream(state, player, {
-            signal: AbortSignal.any([controller.signal, firstAttempt.signal]),
-            activityId: speechActivityId(state, player),
-            onSegmentReceived: appendSegment,
-          });
-      // Always observe a losing promise: cancellation may reject after the timer wins.
-      void firstStream.catch(() => undefined);
-      const firstResult = await Promise.race([firstStream.then(() => "done" as const), new Promise<"timeout">((resolve) => {
-        timeoutId = setTimeout(() => resolve("timeout"), 60_000);
-      })]);
-      clearTimeout(timeoutId);
-      if (firstResult === "timeout") {
-        if (!isValid()) return;
-        if (collected.length === 0) {
+          : startDirectStream("primary", primaryController);
+        const startHedge = () => {
+          if (winner || !isValid() || hedgeStream) return;
           recordDemoFixMetric(state.gameId, "retries");
-          firstAttempt.abort();
-          matchingPending?.controller.abort();
-          const retryController = new AbortController();
-          const retry = generateAISpeechSegmentsStream(state, player, {
-            signal: AbortSignal.any([controller.signal, retryController.signal]),
-            activityId: speechActivityId(state, player),
-            onSegmentReceived: appendSegment,
-          });
-          void retry.catch(() => undefined);
-          await Promise.race([retry, new Promise<never>((_, reject) => { timeoutId = setTimeout(() => { retryController.abort(); reject(new Error("Zerone Agent 发言超过 120 秒")); }, 60_000); })]);
-        } else {
-          await Promise.race([firstStream, new Promise<never>((_, reject) => { timeoutId = setTimeout(() => {
-            firstAttempt.abort();
-            matchingPending?.controller.abort();
+          hedgeStream = startDirectStream("hedge", hedgeController);
+          void hedgeStream.then(() => claimCompletion("hedge"), rejectWinner);
+        };
+        void primaryStream.then(() => claimCompletion("primary"), rejectWinner);
+        hedgeTimeoutId = setTimeout(startHedge, hedgeDelay);
+        const hardTimeout = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            abortPrimary();
+            hedgeController.abort();
             reject(new Error("Zerone Agent 发言超过 120 秒"));
-          }, 60_000); })]);
-        }
+          }, hardDelay);
+        });
+        const winningSource = await Promise.race([winnerReady, hardTimeout]);
+        clearTimeout(hedgeTimeoutId);
+        const winningStream = winningSource === "primary" ? primaryStream : hedgeStream;
+        if (!winningStream) throw new Error("Zerone Agent 对冲请求未启动");
+        await Promise.race([winningStream, hardTimeout]);
       }
       if (!isValid()) return;
       await displayChain;
@@ -307,6 +338,7 @@ export function useDayPhase(
       });
     } finally {
       clearTimeout(timeoutId);
+      clearTimeout(hedgeTimeoutId);
       clearInterval(thinkingTimer);
       if (request.isValid()) setIsWaitingForAI(false);
     }

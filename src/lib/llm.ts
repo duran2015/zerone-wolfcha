@@ -436,7 +436,8 @@ async function fetchWithRetry(
         ? TOKENPAY_RETRYABLE_STATUS
         : RETRYABLE_STATUS;
       if (!retryableStatuses.has(response.status) || attempt === attemptLimit) {
-        if (tracked) finishAiActivity(logicalRequestId, "error", `HTTP ${response.status}`);
+        if (tracked) finishAiActivity(logicalRequestId, "error",
+          response.headers.get("X-Zerone-Error-Detail") || `Runtime returned HTTP ${response.status}`);
         return response;
       }
 
@@ -462,7 +463,8 @@ async function fetchWithRetry(
   }
 
   if (lastResponse) {
-    if (tracked) finishAiActivity(logicalRequestId, "error", `HTTP ${lastResponse.status}`);
+    if (tracked) finishAiActivity(logicalRequestId, "error",
+      lastResponse.headers.get("X-Zerone-Error-Detail") || `Runtime returned HTTP ${lastResponse.status}`);
     return lastResponse;
   }
   if (tracked) finishAiActivity(logicalRequestId, "error", lastError instanceof Error ? lastError.name : "网络错误");
