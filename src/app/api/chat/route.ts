@@ -775,12 +775,21 @@ export async function POST(request: NextRequest) {
         };
         if (Array.isArray(body.requests)) {
           if (body.requests.length > MAX_BATCH_REQUESTS) return NextResponse.json({ error: "Too many batch requests" }, { status: 400 });
-          const results = await Promise.all(body.requests.map(async (item: Record<string, unknown>) => {
-            if (!Array.isArray(item.messages) || item.stream === true) return { ok: false, status: 400, error: "Invalid batch request" };
-            const upstream = await invoke(item);
-            if (!upstream.ok) return { ok: false, status: upstream.status, error: `Zerone Hub returned HTTP ${upstream.status}` };
-            return { ok: true, status: 200, data: await upstream.json() };
-          }));
+          const results = [];
+          for (let offset = 0; offset < body.requests.length; offset += 3) {
+            const batch = body.requests.slice(offset, offset + 3) as Record<string, unknown>[];
+            results.push(...await Promise.all(batch.map(async (item) => {
+              if (!Array.isArray(item.messages) || item.stream === true) return { ok: false, status: 400, error: "Invalid batch request" };
+              try {
+                const upstream = await invoke(item);
+                if (!upstream.ok) return { ok: false, status: upstream.status, error: `Zerone Agent returned HTTP ${upstream.status}` };
+                return { ok: true, status: 200, data: await upstream.json() };
+              } catch (error) {
+                console.warn("[zerone] batch seat failed", { seat: item.zeroneSeat, phase: item.zeronePhase, error: error instanceof Error ? error.name : "unknown" });
+                return { ok: false, status: 504, error: "Zerone Agent request timed out" };
+              }
+            })));
+          }
           return NextResponse.json({ results });
         }
         if (!Array.isArray(body.messages)) return NextResponse.json({ error: "Invalid messages" }, { status: 400 });

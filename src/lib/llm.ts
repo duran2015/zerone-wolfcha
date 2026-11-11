@@ -21,7 +21,7 @@ import { GAME_SESSION_EXPIRED_CODE } from "@/lib/game-session-policy";
 import { parseLLMJson } from "./llm-json";
 import { generateUUID } from "./utils";
 import { withTimeout } from "@/lib/request-timeout";
-import { isZeroneGameEnabled, zeroneRequestContext } from "@/lib/zerone-game";
+import { isZeroneGameEnabled, zeroneRequestContext, zeroneSeatLabel } from "@/lib/zerone-game";
 import { finishAiActivity, startAiActivity } from "@/lib/ai-activity";
 import type { PromptScope } from "@/lib/deepseek-prompt-scope";
 import { resolveReasoning, type ReasoningProfile } from "@/lib/reasoning-profile";
@@ -216,6 +216,8 @@ export interface ReasoningOptions {
 
 export interface GenerateOptions {
   signal?: AbortSignal;
+  /** Stable ID for grouping retries of one logical gameplay request in the activity panel. */
+  activityId?: string;
   zeroneSeat?: number;
   zeronePhase?: string;
   model: string;
@@ -395,11 +397,12 @@ async function fetchWithRetry(
 ): Promise<Response> {
   let lastResponse: Response | null = null;
   let lastError: unknown = null;
-  const tracked = isZeroneGameEnabled() && String(input).includes("/api/chat");
+  const tracked = isZeroneGameEnabled() && String(input).includes("/api/chat") && !/"requests"\s*:/.test(String(init.body || ""));
+  const attemptLimit = isZeroneGameEnabled() && String(input).includes("/api/chat") ? 1 : maxAttempts;
   let streaming = false;
   if (tracked) {
     const headers = new Headers(init.headers);
-    let label = `${Number(headers.get("X-Zerone-Seat") || 0) + 1}号 AI 居民`;
+    let label = zeroneSeatLabel(Number(headers.get("X-Zerone-Seat") || 0));
     let phase = headers.get("X-Zerone-Phase") || "AI 决策";
     try {
       const body = JSON.parse(String(init.body || "{}"));
@@ -412,7 +415,7 @@ async function fetchWithRetry(
     startAiActivity(logicalRequestId, label, phase);
   }
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= attemptLimit; attempt++) {
     if (init.signal?.aborted) finishAiActivity(logicalRequestId, "error", "请求已取消");
     init.signal?.throwIfAborted();
     const attemptNumber = ++attemptSequence.current;
@@ -432,7 +435,7 @@ async function fetchWithRetry(
       const retryableStatuses = modelSource === "tokenpay"
         ? TOKENPAY_RETRYABLE_STATUS
         : RETRYABLE_STATUS;
-      if (!retryableStatuses.has(response.status) || attempt === maxAttempts) {
+      if (!retryableStatuses.has(response.status) || attempt === attemptLimit) {
         if (tracked) finishAiActivity(logicalRequestId, "error", `HTTP ${response.status}`);
         return response;
       }
@@ -450,7 +453,7 @@ async function fetchWithRetry(
       lastError = err;
       // TokenPay 没有请求幂等键。网络断开时无法确认上游是否已经计费，
       // 因此只允许对明确未执行的 429 重试，不自动重放模糊失败。
-      if (modelSource === "tokenpay" || attempt === maxAttempts) break;
+      if (modelSource === "tokenpay" || attempt === attemptLimit) break;
       const base = 400;
       const jitter = Math.floor(Math.random() * 200);
       const backoffMs = base * 2 ** (attempt - 1) + jitter;
@@ -869,6 +872,11 @@ async function generateCompletionBatchInternal(
     request_id: generateUUID(),
     ...(isZeroneGameEnabled() ? zeroneRequestContext(request.zeroneSeat, request.zeronePhase).body : {}),
   }));
+  const batchActivityIds = isZeroneGameEnabled() ? resolvedRequests.map((request) => {
+    const id = generateUUID();
+    if (typeof request.zeroneSeat === "number") startAiActivity(id, zeroneSeatLabel(request.zeroneSeat), request.zeronePhase || "utility");
+    return id;
+  }) : [];
   const response = await fetchWithRetry(
     "/api/chat",
     {
@@ -882,6 +890,7 @@ async function generateCompletionBatchInternal(
   );
 
   if (!response.ok) {
+    batchActivityIds.forEach((id) => finishAiActivity(id, "error", `HTTP ${response.status}`));
     const errorText = await response.text().catch(() => "");
     throw new Error(formatApiError(response.status, errorText));
   }
@@ -921,6 +930,8 @@ async function generateCompletionBatchInternal(
       raw,
     };
   });
+  batchActivityIds.forEach((id, index) => finishAiActivity(id, parsedResults[index]?.ok ? "success" : "error",
+    parsedResults[index]?.ok ? "HTTP 200" : parsedResults[index]?.error || "无响应"));
 
   if (allowTopUpRecovery && effectiveSource === "tokenpay") {
     const retryIndexes = getTokenPayTopUpRetryIndexes(results);
@@ -963,7 +974,7 @@ export async function* generateCompletionStream(
   Object.assign(headers, await getAuthHeaders());
   if (isZeroneGameEnabled()) Object.assign(headers, zeroneRequestContext(options.zeroneSeat, options.zeronePhase).headers);
   attachGameSessionHeader(headers);
-  const logicalRequestId = generateUUID();
+  const logicalRequestId = options.activityId ?? generateUUID();
 
   const response = await fetchWithTokenPayRecovery(
     "/api/chat",

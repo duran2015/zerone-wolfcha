@@ -847,7 +847,7 @@ export async function generateAISpeechSegments(
   } catch (error) {
     const raw = String(error);
     const isRateLimited = raw.includes("429") || raw.includes("limit_requests");
-    const fallback = isRateLimited ? t("gameMaster.tooManyRequests") : "";
+    const fallback = isRateLimited && process.env.NEXT_PUBLIC_ZERONE_HUB_MODE !== "1" ? t("gameMaster.tooManyRequests") : "";
     await aiLogger.log({
       type: "speech",
       request: {
@@ -859,7 +859,7 @@ export async function generateAISpeechSegments(
       error: raw,
     });
 
-    if (isRateLimited) {
+    if (isRateLimited && fallback) {
       return [fallback];
     }
 
@@ -869,6 +869,7 @@ export async function generateAISpeechSegments(
 
 export interface StreamingSpeechOptions {
   signal?: AbortSignal;
+  activityId?: string;
   onSegmentReceived?: (segment: string, index: number) => void;
   onProgress?: (current: number) => void;
   onComplete?: (segments: string[]) => void;
@@ -953,6 +954,7 @@ export async function generateAISpeechSegmentsStream(
   try {
     const stream = generateCompletionStream(mergeOptionsFromModelRef(player.agentProfile!.modelRef, {
       zeroneSeat: player.seat, zeronePhase: state.phase,
+      activityId: options.activityId,
       model: player.agentProfile!.modelRef.model,
       messages,
       promptScope: "gameplay",
@@ -1019,7 +1021,7 @@ export async function generateAISpeechSegmentsStream(
     if (options.signal?.aborted) throw error;
     const raw = String(error);
     const isRateLimited = raw.includes("429") || raw.includes("limit_requests");
-    const rateLimitResult = isRateLimited && !parseError ? [t("gameMaster.tooManyRequests")] : null;
+    const rateLimitResult = process.env.NEXT_PUBLIC_ZERONE_HUB_MODE !== "1" && isRateLimited && !parseError ? [t("gameMaster.tooManyRequests")] : null;
     await aiLogger.log({
       type: "speech",
       request: {
@@ -2072,8 +2074,13 @@ export async function generateWhiteWolfKingBoomDecision(
   }
 }
 
-/** 预取仅在实际提示词完全一致时复用，消息数量不足以代表上下文。 */
+/** 只用本轮已提交、该发言者可见的公开发言判断预取是否仍可复用。 */
 export function getSpeechContextKey(state: GameState, player: Player): string {
-  const prompt = resolvePhasePrompt(state.phase, state, player);
-  return JSON.stringify([player.agentProfile?.modelRef, prompt.system, prompt.user]);
+  void player; // All entries below are public; keeping the player argument documents the visibility seam.
+  const currentRound = state.speechRoundStartMessageIndex ?? undefined;
+  return JSON.stringify(state.messages.filter((message) =>
+    !message.isSystem && message.day === state.day && message.phase === state.phase &&
+    (currentRound === undefined || message.speechRound === currentRound) &&
+    state.players.some((speaker) => speaker.playerId === message.playerId)
+  ).map((message) => [message.playerId, message.content]));
 }

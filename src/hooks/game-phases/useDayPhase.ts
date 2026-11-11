@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { useAtom, useStore } from "jotai";
 import type { GameState, Player } from "@/types/game";
-import type { PrefetchCriteria, PrefetchedSpeech } from "../useDialogueManager";
+import { prefetchCriteriaKey, type PrefetchCriteria, type PrefetchedSpeech } from "../useDialogueManager";
 import { gameStateAtom } from "@/store/game-machine";
 import {
   transitionPhase,
@@ -24,8 +24,8 @@ import { resolveVoiceId, type AppLocale } from "@/lib/voice-constants";
 import { getLocale } from "@/i18n/locale-store";
 import { createSpeechRequest, type SpeechRequest } from "@/lib/speech-request";
 import { generateUUID } from "@/lib/utils";
-import { withTimeout } from "@/lib/request-timeout";
 import { isGameSessionExpiredMessage } from "@/lib/llm";
+import { recordDemoFixMetric } from "@/lib/demo-fix-metrics";
 
 export interface DayPhaseCallbacks {
   setDialogue: (speaker: string, text: string, isStreaming?: boolean) => void;
@@ -41,6 +41,20 @@ export interface DayPhaseCallbacks {
   consumePrefetchedSpeech: (criteria: PrefetchCriteria) => string[] | null;
   setAfterLastWords: (callback: ((s: GameState) => Promise<void>) | null) => void;
 }
+
+type PendingSpeechPrefetch = {
+  criteria: PrefetchCriteria;
+  controller: AbortController;
+  promise: Promise<string[]>;
+  segments: string[];
+  listeners: Set<(segment: string, index: number) => void>;
+};
+
+const samePrefetchScope = (left: PrefetchCriteria, right: Pick<PrefetchCriteria, "gameId" | "day" | "phase">) =>
+  left.gameId === right.gameId && left.day === right.day && left.phase === right.phase;
+
+const speechActivityId = (state: GameState, player: Player): string =>
+  `speech:${state.gameId}:${state.day}:${state.phase}:${player.playerId}:${state.speechRoundStartMessageIndex ?? 0}`;
 
 export interface DayPhaseActions {
   isSpeechBlocked: () => boolean;
@@ -76,8 +90,7 @@ export function useDayPhase(
 
   const store = useStore();
   const activeRequestRef = useRef<(SpeechRequest & { controller: AbortController }) | null>(null);
-  const prefetchControllerRef = useRef<AbortController | null>(null);
-  const pendingPrefetchRef = useRef<{ criteria: PrefetchCriteria; controller: AbortController; promise: Promise<string[]> } | null>(null);
+  const pendingPrefetchesRef = useRef(new Map<string, PendingSpeechPrefetch>());
   const failedRequestRef = useRef<SpeechRequest | null>(null);
   const isSpeechBlocked = useCallback(() => failedRequestRef.current?.isValid() === true, []);
 
@@ -85,42 +98,60 @@ export function useDayPhase(
     if (activeRequestRef.current && !activeRequestRef.current.isValid()) {
       activeRequestRef.current.controller.abort();
     }
-    const pending = pendingPrefetchRef.current;
-    if (pending && (pending.criteria.gameId !== gameState.gameId || pending.criteria.phase !== gameState.phase)) pending.controller.abort();
+    for (const [key, pending] of pendingPrefetchesRef.current) {
+      if (samePrefetchScope(pending.criteria, gameState)) continue;
+      pending.controller.abort();
+      pendingPrefetchesRef.current.delete(key);
+    }
   }, [gameState]);
   useEffect(() => () => {
     activeRequestRef.current?.controller.abort();
     activeRequestRef.current = null;
-    prefetchControllerRef.current?.abort();
+    for (const pending of pendingPrefetchesRef.current.values()) pending.controller.abort();
+    pendingPrefetchesRef.current.clear();
   }, []);
 
   const prefetchNextAISpeech = useCallback(async (state: GameState, player: Player) => {
     if (!player.agentProfile) return;
-    prefetchControllerRef.current?.abort();
-    const controller = new AbortController();
-    prefetchControllerRef.current = controller;
-    const token = getToken();
-    const isValid = () => !controller.signal.aborted && token.isValid() &&
-      prefetchControllerRef.current === controller && store.get(gameStateAtom).gameId === state.gameId;
     const base: PrefetchedSpeech = {
       gameId: state.gameId, contextKey: getSpeechContextKey(state, player),
       playerId: player.playerId, phase: state.phase, day: state.day,
-      messageCount: state.messages.length, segments: [], isComplete: false, createdAt: Date.now(),
+      segments: [], isComplete: false, createdAt: Date.now(),
     };
     const criteria: PrefetchCriteria = {
       gameId: base.gameId, contextKey: base.contextKey, playerId: base.playerId,
-      phase: base.phase, day: base.day, messageCount: base.messageCount,
+      phase: base.phase, day: base.day,
     };
-    setPrefetchedSpeech(base);
-    const promise = generateAISpeechSegmentsStream(state, player, { signal: controller.signal });
-    pendingPrefetchRef.current = { criteria, controller, promise };
+    const key = prefetchCriteriaKey(criteria);
+    const existing = pendingPrefetchesRef.current.get(key);
+    if (existing && !existing.controller.signal.aborted) return existing.promise.then(() => undefined);
+
+    for (const [pendingKey, pending] of pendingPrefetchesRef.current) {
+      if (samePrefetchScope(pending.criteria, criteria)) continue;
+      pending.controller.abort();
+      pendingPrefetchesRef.current.delete(pendingKey);
+    }
+
+    const controller = new AbortController();
+    const token = getToken();
+    const isValid = () => !controller.signal.aborted && token.isValid() &&
+      pendingPrefetchesRef.current.get(key)?.controller === controller && store.get(gameStateAtom).gameId === state.gameId;
+    const pending = { criteria, controller, promise: Promise.resolve([] as string[]), segments: [] as string[], listeners: new Set<(segment: string, index: number) => void>() };
+    pendingPrefetchesRef.current.set(key, pending);
+    const promise = generateAISpeechSegmentsStream(state, player, { signal: controller.signal,
+      activityId: speechActivityId(state, player),
+      onSegmentReceived: (segment, index) => {
+        pending.segments[index] = segment;
+        for (const listener of pending.listeners) listener(segment, index);
+      },
+    });
+    pending.promise = promise;
     try {
       const segments = await promise;
       if (isValid()) setPrefetchedSpeech({ ...base, segments, isComplete: true });
-    } catch {
-      if (isValid()) setPrefetchedSpeech(null);
-    } finally {
-      if (pendingPrefetchRef.current?.controller === controller) pendingPrefetchRef.current = null;
+    } catch { /* aborted or failed prefetches are not cached */ }
+    finally {
+      if (pendingPrefetchesRef.current.get(key)?.controller === controller) pendingPrefetchesRef.current.delete(key);
     }
   }, [getToken, setPrefetchedSpeech, store]);
 
@@ -156,9 +187,12 @@ export function useDayPhase(
       ? "tokendance"
       : "minimax";
     const collected: string[] = [];
-    let displayedCount = 0;
     let displayChain = Promise.resolve();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const startedAt = Date.now();
+    const thinkingTimer = setInterval(() => {
+      if (isValid() && collected.length === 0) setDialogue(`${player.seat + 1}号 · ${player.displayName} · Zerone Agent`, `仍在思考（已用 ${Math.floor((Date.now() - startedAt) / 1000)} 秒）`, true);
+    }, 1000);
 
     const appendSegment = (segment: string, index: number) => {
       if (!isValid() || index !== collected.length) return;
@@ -176,11 +210,9 @@ export function useDayPhase(
       displayChain = displayChain.then(async () => {
         if (!isValid()) return;
         if (index === 0) {
-          clearTimeout(timeoutId);
           setIsWaitingForAI(false);
         }
         appendToSpeechQueue(segment, id, index);
-        displayedCount += 1;
         if (audioManager.isEnabled()) {
           void audioManager.ensureReady(task).catch(() => undefined);
         }
@@ -189,39 +221,60 @@ export function useDayPhase(
 
     const criteria: PrefetchCriteria = {
       gameId: state.gameId, contextKey: getSpeechContextKey(state, player),
-      playerId: player.playerId, phase: state.phase, day: state.day, messageCount: state.messages.length,
+      playerId: player.playerId, phase: state.phase, day: state.day,
     };
     const prefetched = consumePrefetchedSpeech(criteria);
-    const pending = pendingPrefetchRef.current;
-    const matchingPending = pending && !pending.controller.signal.aborted &&
-      Object.entries(criteria).every(([key, value]) => pending.criteria[key as keyof PrefetchCriteria] === value)
-      ? pending : null;
-    if (!matchingPending) prefetchControllerRef.current?.abort();
-    else controller.signal.addEventListener("abort", () => matchingPending.controller.abort(), { once: true });
+    const matchingPending = pendingPrefetchesRef.current.get(prefetchCriteriaKey(criteria)) ?? null;
+    if (prefetched || matchingPending) recordDemoFixMetric(state.gameId, "prefetchHits");
     initStreamingSpeechQueue(player, afterSpeech, request);
     setIsWaitingForAI(true);
     setDialogue(player.displayName, t("dayPhase.organizing"), true);
 
-    const timeoutPromise = new Promise<"timeout">((resolve) => {
-      timeoutId = setTimeout(() => {
-        if (!isValid()) { resolve("timeout"); return; }
-        controller.abort();
-        // 超时兜底仍属于本次请求；关闭网络回调后才能写入。
-        if (displayedCount === 0) appendToSpeechQueue(t("dayPhase.timeout"), id, 0);
-        finalizeSpeechQueue({ requestId: id });
-        setIsWaitingForAI(false);
-        resolve("timeout");
-      }, 60000);
-    });
-
     try {
-      const streamPromise = prefetched
+      const firstAttempt = new AbortController();
+      const firstStream = prefetched
         ? Promise.resolve(prefetched.forEach(appendSegment))
         : matchingPending
-          ? matchingPending.promise.then((segments) => segments.forEach(appendSegment))
-        : generateAISpeechSegmentsStream(state, player, { signal: controller.signal, onSegmentReceived: appendSegment });
-      const result = await Promise.race([streamPromise, timeoutPromise]);
-      if (result === "timeout" || !isValid()) return;
+          ? (async () => {
+              matchingPending.listeners.add(appendSegment);
+              matchingPending.segments.forEach(appendSegment);
+              try { await matchingPending.promise; }
+              finally { matchingPending.listeners.delete(appendSegment); }
+            })()
+        : generateAISpeechSegmentsStream(state, player, {
+            signal: AbortSignal.any([controller.signal, firstAttempt.signal]),
+            activityId: speechActivityId(state, player),
+            onSegmentReceived: appendSegment,
+          });
+      // Always observe a losing promise: cancellation may reject after the timer wins.
+      void firstStream.catch(() => undefined);
+      const firstResult = await Promise.race([firstStream.then(() => "done" as const), new Promise<"timeout">((resolve) => {
+        timeoutId = setTimeout(() => resolve("timeout"), 60_000);
+      })]);
+      clearTimeout(timeoutId);
+      if (firstResult === "timeout") {
+        if (!isValid()) return;
+        if (collected.length === 0) {
+          recordDemoFixMetric(state.gameId, "retries");
+          firstAttempt.abort();
+          matchingPending?.controller.abort();
+          const retryController = new AbortController();
+          const retry = generateAISpeechSegmentsStream(state, player, {
+            signal: AbortSignal.any([controller.signal, retryController.signal]),
+            activityId: speechActivityId(state, player),
+            onSegmentReceived: appendSegment,
+          });
+          void retry.catch(() => undefined);
+          await Promise.race([retry, new Promise<never>((_, reject) => { timeoutId = setTimeout(() => { retryController.abort(); reject(new Error("Zerone Agent 发言超过 120 秒")); }, 60_000); })]);
+        } else {
+          await Promise.race([firstStream, new Promise<never>((_, reject) => { timeoutId = setTimeout(() => {
+            firstAttempt.abort();
+            matchingPending?.controller.abort();
+            reject(new Error("Zerone Agent 发言超过 120 秒"));
+          }, 60_000); })]);
+        }
+      }
+      if (!isValid()) return;
       await displayChain;
       if (!isValid()) return;
       const nextSeat = getNextSpeechSeat(state);
@@ -236,10 +289,11 @@ export function useDayPhase(
       }
     } catch (error) {
       if (!isValid()) return;
+      controller.abort();
       await displayChain;
-      if (!isValid()) return;
       // 错误属于系统，不能记为角色台词。保留已确认段落，阻止自动推进至下一人。
       failedRequestRef.current = request;
+      recordDemoFixMetric(state.gameId, "failures");
       if (!collected.length) setDialogue(speakerHost, t(isGameSessionExpiredMessage(String(error))
         ? "dayPhase.sessionExpired" : "dayPhase.interrupted"), false);
       finalizeSpeechQueue({ requestId: id });
@@ -253,6 +307,7 @@ export function useDayPhase(
       });
     } finally {
       clearTimeout(timeoutId);
+      clearInterval(thinkingTimer);
       if (request.isValid()) setIsWaitingForAI(false);
     }
   }, [appendToSpeechQueue, consumePrefetchedSpeech, finalizeSpeechQueue, getToken,

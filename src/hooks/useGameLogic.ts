@@ -50,7 +50,7 @@ import {
   randomDelay,
   computeUniqueTopSeat,
 } from "@/lib/game-flow-controller";
-import { playNarrator } from "@/lib/narrator-audio-player";
+import { getNarratorPlayer, playNarrator } from "@/lib/narrator-audio-player";
 import { PhaseManager } from "@/game/core/PhaseManager";
 import { supabase } from "@/lib/supabase";
 import { gameStatsTracker } from "@/hooks/useGameStats";
@@ -59,6 +59,7 @@ import { continueAfterHunterShotWithBadgeTransfer } from "@/lib/hunter-badge-flo
 import { isQuotaExhaustedMessage } from "@/lib/llm";
 import { aiLogger } from "@/lib/ai-logger";
 import { clearZeroneGame, isZeroneGameEnabled, loadZeroneRoster, startZeroneGame, syncZeroneGameEvents, type ZeroneResident } from "@/lib/zerone-game";
+import { clearAiActivities } from "@/lib/ai-activity";
 
 // 子模块
 import { useDialogueManager, type DialogueState } from "./useDialogueManager";
@@ -147,6 +148,7 @@ export function useGameLogic() {
   // ============================================
   const flowController = useRef(new AsyncFlowController());
   const phaseManagerRef = useRef(new PhaseManager());
+  const startedDayPhasesRef = useRef(new Set<string>());
   const phaseExtrasRef = useRef<{ phase: Phase; extras: Record<string, unknown> } | null>(null);
   const gameStateRef = useRef<GameState>(gameState);
   const prevPhaseRef = useRef<Phase>(gameState.phase);
@@ -462,6 +464,7 @@ export function useGameLogic() {
   // ============================================
   const maybeGenerateDailySummary = useCallback(
     async (state: GameState, options?: { force?: boolean }): Promise<GameState> => {
+      if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1") return state;
       if (state.day <= 0) return state;
       if (!options?.force && state.dailySummaries?.[state.day]?.length) return state;
       if (!state.messages || state.messages.length === 0) return state;
@@ -789,6 +792,10 @@ export function useGameLogic() {
     token: ReturnType<typeof getToken>,
     options?: { skipAnnouncements?: boolean }
   ) => {
+    const dayKey = `${state.gameId}:${state.day}`;
+    if (startedDayPhasesRef.current.has(dayKey)) return;
+    startedDayPhasesRef.current.add(dayKey);
+    console.info("[wolfcha] day phase started", dayKey);
     // 第一天：先进行警徽评选
     if (state.day === 1 && state.badge.holderSeat === null) {
       await badgePhase.startBadgeSignupPhase(state);
@@ -805,14 +812,19 @@ export function useGameLogic() {
   useEffect(() => {
     if (gameState.phase !== "DAY_START") return;
     const gameId = gameState.gameId;
-    const timer = window.setTimeout(() => {
+    let narrationEndedAt: number | null = null;
+    const timer = window.setInterval(() => {
+      if (getNarratorPlayer().getIsPlaying()) { narrationEndedAt = null; return; }
+      narrationEndedAt ??= Date.now();
+      if (Date.now() - narrationEndedAt < 45_000) return;
       const current = gameStateRef.current;
-      if (current.gameId !== gameId || current.phase !== "DAY_START" || current.isPaused || isAwaitingRoleRevealRef.current) return;
+      if (current.gameId !== gameId || current.phase !== "DAY_START" || current.isPaused || isAwaitingRoleRevealRef.current || startedDayPhasesRef.current.has(`${current.gameId}:${current.day}`)) return;
+      window.clearInterval(timer);
       console.warn("[wolfcha] Recovering stalled DAY_START");
       const start = startDayPhaseInternalRef.current;
       if (start) void start(current, getToken()).catch((error) => console.error("[wolfcha] DAY_START recovery failed", error));
-    }, 15_000);
-    return () => window.clearTimeout(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
   }, [gameState.phase, gameState.gameId, getToken]);
 
   const proceedToNight = useCallback(async (state: GameState, token: ReturnType<typeof getToken>) => {
@@ -1419,6 +1431,7 @@ export function useGameLogic() {
 
   /** 开始游戏 */
   const startGame = useCallback(async (options?: Partial<StartGameOptions>) => {
+    clearAiActivities();
     const {
       fixedRoles,
       devPreset,
@@ -1433,7 +1446,11 @@ export function useGameLogic() {
 
     const isGenshinMode = isZeroneGameEnabled() ? false : requestedGenshinMode;
     const isSpectatorMode = isZeroneGameEnabled() ? false : requestedSpectatorMode;
-    const totalPlayers = isZeroneGameEnabled() ? 10 : playerCount;
+    const requestedQuickCount = Number.parseInt(process.env.NEXT_PUBLIC_ZERONE_QUICK_PLAYER_COUNT ?? "10", 10);
+    const zeroneDemoPlayerCount = process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" && [8, 9, 10].includes(requestedQuickCount)
+      ? requestedQuickCount
+      : 10;
+    const totalPlayers = isZeroneGameEnabled() ? zeroneDemoPlayerCount : playerCount;
     // Both human and all-AI games use the avatar entrance; model logos keep their own entry.
     const useMatchingEntrance = !isGenshinMode;
 
@@ -1895,6 +1912,7 @@ export function useGameLogic() {
   /** 重新开始 */
   const restartGame = useCallback(() => {
     if (isZeroneGameEnabled()) clearZeroneGame();
+    clearAiActivities();
     flowController.current.interrupt();
     void gameSessionTracker.abandon().catch((error) => {
       console.error("[game-session] Failed to abandon session:", error);
@@ -1966,6 +1984,21 @@ export function useGameLogic() {
     const token = getToken();
     await runDaySpeechAction(liveState, token, "ADVANCE_SPEAKER");
   }, [humanPlayer, getToken, runDaySpeechAction]);
+
+  /** 演示模式：语音识别成功后一次性提交并结束真人发言。 */
+  const handleHumanVoiceSpeech = useCallback(async (transcript: string) => {
+    const speech = transcript.trim();
+    if (!speech || !humanPlayer) return;
+
+    const liveState = gameStateRef.current;
+    const isMyTurn = ["DAY_SPEECH", "DAY_LAST_WORDS", "DAY_BADGE_SPEECH", "DAY_PK_SPEECH"].includes(liveState.phase)
+      && liveState.currentSpeakerSeat === humanPlayer.seat;
+    if (!isMyTurn) return;
+
+    setInputText("");
+    setGameState(addPlayerMessage(liveState, humanPlayer.playerId, speech));
+    await handleFinishSpeaking();
+  }, [handleFinishSpeaking, humanPlayer, setGameState]);
 
   /** 下一轮按钮 */
   const handleNextRound = useCallback(async () => {
@@ -2446,6 +2479,7 @@ export function useGameLogic() {
     continueAfterRoleReveal,
     restartGame,
     handleHumanSpeech,
+    handleHumanVoiceSpeech,
     handleFinishSpeaking,
     handleBadgeSignup: badgePhase.handleBadgeSignup,
     handleHumanVote,

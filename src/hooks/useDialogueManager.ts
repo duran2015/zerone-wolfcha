@@ -30,7 +30,6 @@ export interface PrefetchedSpeech {
   playerId: string;
   phase: Phase;
   day: number;
-  messageCount: number;
   segments: string[];
   isComplete: boolean;
   createdAt: number;
@@ -42,7 +41,6 @@ export interface PrefetchCriteria {
   playerId: string;
   phase: Phase;
   day: number;
-  messageCount: number;
 }
 
 export const isPrefetchCompatible = (
@@ -53,11 +51,16 @@ export const isPrefetchCompatible = (
   prefetch.contextKey === criteria.contextKey &&
   prefetch.playerId === criteria.playerId &&
   prefetch.phase === criteria.phase &&
-  prefetch.day === criteria.day &&
-  // Any additional public message makes the prefetched prompt stale.
-  // Requiring an exact count prevents an AI speech generated before that
-  // message from being reused after the table context has changed.
-  criteria.messageCount === prefetch.messageCount;
+  prefetch.day === criteria.day;
+
+export const prefetchCriteriaKey = (criteria: PrefetchCriteria): string =>
+  JSON.stringify([
+    criteria.gameId,
+    criteria.day,
+    criteria.phase,
+    criteria.playerId,
+    criteria.contextKey,
+  ]);
 
 /**
  * 对话管理 Hook
@@ -68,7 +71,7 @@ export function useDialogueManager() {
   const [isWaitingForAI, setIsWaitingForAI] = useState(false);
   const [waitingForNextRound, setWaitingForNextRound] = useState(false);
   const speechQueueRef = useRef<SpeechQueueState | null>(null);
-  const prefetchedSpeechRef = useRef<PrefetchedSpeech | null>(null);
+  const prefetchedSpeechRef = useRef(new Map<string, PrefetchedSpeech>());
 
   /** 设置对话内容 */
   const setDialogue = useCallback((speaker: string, text: string, isStreaming = false) => {
@@ -244,26 +247,24 @@ export function useDialogueManager() {
 
   /** 设置预加载发言缓存 */
   const setPrefetchedSpeech = useCallback((prefetch: PrefetchedSpeech | null) => {
-    prefetchedSpeechRef.current = prefetch;
+    if (!prefetch) {
+      prefetchedSpeechRef.current.clear();
+      return;
+    }
+    prefetchedSpeechRef.current.set(prefetchCriteriaKey(prefetch), prefetch);
   }, []);
 
-  /** 消费预加载发言缓存（匹配元数据后清除） */
+  /** 消费精确匹配的预加载发言；其他上下文的缓存继续保留。 */
   const consumePrefetchedSpeech = useCallback((criteria: PrefetchCriteria) => {
-    const prefetch = prefetchedSpeechRef.current;
+    const key = prefetchCriteriaKey(criteria);
+    const prefetch = prefetchedSpeechRef.current.get(key);
     if (!prefetch) return null;
-
-    const matches = isPrefetchCompatible(prefetch, criteria);
-
-    if (!matches) {
-      prefetchedSpeechRef.current = null;
-      return null;
-    }
 
     if (!prefetch.isComplete || prefetch.segments.length === 0) {
       return null;
     }
 
-    prefetchedSpeechRef.current = null;
+    prefetchedSpeechRef.current.delete(key);
     return prefetch.segments;
   }, []);
 
@@ -273,7 +274,7 @@ export function useDialogueManager() {
     setIsWaitingForAI(false);
     setWaitingForNextRound(false);
     speechQueueRef.current = null;
-    prefetchedSpeechRef.current = null;
+    prefetchedSpeechRef.current.clear();
   }, []);
 
   /** 检查下一个发言者是否是AI（用于自动推进时减少延迟） */

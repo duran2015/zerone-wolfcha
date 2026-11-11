@@ -164,6 +164,7 @@ export default function Home() {
     continueAfterRoleReveal,
     restartGame,
     handleHumanSpeech,
+    handleHumanVoiceSpeech,
     handleFinishSpeaking,
     handleBadgeSignup,
     handleHumanVote,
@@ -681,7 +682,7 @@ export default function Home() {
 
     const raw = durationMs / zeroneResidentVoiceRate(player?.avatarSeed) / Math.max(1, text.length);
     return Math.min(60, Math.max(10, Math.round(raw)));
-  }, [currentDialogue, gameState.players]);
+  }, [currentDialogue, gameState.players, t]);
 
   const { displayedText, isTyping, completedText } = useTypewriter({
     text: currentDialogue?.text || "",
@@ -742,7 +743,9 @@ export default function Home() {
         // 当AI在发言时（有currentDialogue），按键推进下一句
         if (currentDialogue) {
           e.preventDefault();
-          if (shouldWaitForVoice()) return;
+          // Demo fast-forward: one Enter stops the current resident voice and
+          // advances immediately instead of making testers wait for playback.
+          if (shouldWaitForVoice()) audioManager.stopCurrent();
           if (completedText === currentDialogue.text) markCurrentSegmentCompleted();
           Promise.resolve(advanceSpeech()).then((r) => {
             if (r?.shouldAdvanceToNextSpeaker) {
@@ -788,6 +791,7 @@ export default function Home() {
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const lastAutoAdvanceSignatureRef = useRef<string | null>(null);
   const autoAdvanceDelayMs = 2500;
+  const shouldAutoAdvanceDialogue = isAutoAdvanceDialogueEnabled || process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1";
   
   // Track when typing finishes to trigger auto-advance
   useEffect(() => {
@@ -798,11 +802,7 @@ export default function Home() {
       }
     };
 
-    if (!isAutoAdvanceDialogueEnabled) {
-      clearAutoAdvanceTimeout();
-      return;
-    }
-    if (shouldUseAiVoice) {
+    if (!shouldAutoAdvanceDialogue) {
       clearAutoAdvanceTimeout();
       return;
     }
@@ -827,7 +827,9 @@ export default function Home() {
       clearAutoAdvanceTimeout();
       return;
     }
-    if (isWaitingForAI) {
+    // A restored/prefetched turn can retain the waiting flag after the dialogue
+    // is already complete. Do not make that stale flag block demo auto-play.
+    if (isWaitingForAI && !currentDialogue) {
       clearAutoAdvanceTimeout();
       return;
     }
@@ -847,10 +849,27 @@ export default function Home() {
 
       clearAutoAdvanceTimeout();
 
-      const delayMs = autoAdvanceDelayMs;
-      autoAdvanceTimeoutRef.current = window.setTimeout(() => {
-        void handleAdvanceDialogue();
-      }, delayMs);
+      if (shouldUseAiVoice && currentDialogue.isStreaming) {
+        const voiceWaitStartedAt = Date.now();
+        const advanceAfterVoice = () => {
+          if (shouldWaitForVoice()) {
+            // Keep demos moving even when TTS generation or playback stalls.
+            if (process.env.NEXT_PUBLIC_ZERONE_DEMO_MODE === "1" && Date.now() - voiceWaitStartedAt >= 15_000) {
+              audioManager.stopCurrent();
+              void handleAdvanceDialogue();
+              return;
+            }
+            autoAdvanceTimeoutRef.current = window.setTimeout(advanceAfterVoice, 300);
+            return;
+          }
+          void handleAdvanceDialogue();
+        };
+        autoAdvanceTimeoutRef.current = window.setTimeout(advanceAfterVoice, 100);
+      } else {
+        autoAdvanceTimeoutRef.current = window.setTimeout(() => {
+          void handleAdvanceDialogue();
+        }, autoAdvanceDelayMs);
+      }
       return;
     }
 
@@ -877,7 +896,7 @@ export default function Home() {
     gameState.phase,
     handleAdvanceDialogue,
     humanPlayer,
-    isAutoAdvanceDialogueEnabled,
+    shouldAutoAdvanceDialogue,
     isEventLogOpen,
     isNotebookOpen,
     isRoleRevealOpen,
@@ -885,6 +904,7 @@ export default function Home() {
     isWaitingForAI,
     showTable,
     waitingForNextRound,
+    shouldWaitForVoice,
   ]);
 
   useEffect(() => {
@@ -1515,7 +1535,7 @@ export default function Home() {
                 {/* 主布局 - 严格对齐 style-unification-preview.html */}
                 <div className="flex-1 flex gap-4 lg:gap-6 lg:px-6 lg:py-6 overflow-hidden w-full justify-center min-h-0">
                   {/* 左侧玩家卡片 */}
-                  <div className="hidden md:flex w-[220px] lg:w-[240px] xl:w-[260px] 2xl:w-[300px] flex-col gap-3 shrink-0 overflow-y-auto overflow-x-visible scrollbar-hide pt-2 pb-2 px-1 -mx-1">
+                  <div className="hidden xl:flex w-[220px] lg:w-[240px] xl:w-[260px] 2xl:w-[300px] flex-col gap-3 shrink-0 overflow-y-auto overflow-x-visible scrollbar-hide pt-2 pb-2 px-1 -mx-1">
                     <AnimatePresence>
                       {leftPlayers.map((player, index) => {
                         const checkResult =
@@ -1575,6 +1595,7 @@ export default function Home() {
                       inputText={inputText}
                       onInputChange={setInputText}
                       onSendMessage={handleHumanSpeech}
+                      onVoiceTranscriptSubmit={handleHumanVoiceSpeech}
                       onFinishSpeaking={handleFinishSpeaking}
                       selectedSeat={selectedSeat}
                       isWaitingForAI={isWaitingForAI}
@@ -1632,7 +1653,7 @@ export default function Home() {
                   </div>
 
                   {/* 右侧玩家卡片 */}
-                  <div className="hidden md:flex w-[220px] lg:w-[240px] xl:w-[260px] 2xl:w-[300px] flex-col gap-3 shrink-0 overflow-y-auto overflow-x-visible scrollbar-hide pt-2 pb-2 px-1 -mx-1">
+                  <div className="hidden xl:flex w-[220px] lg:w-[240px] xl:w-[260px] 2xl:w-[300px] flex-col gap-3 shrink-0 overflow-y-auto overflow-x-visible scrollbar-hide pt-2 pb-2 px-1 -mx-1">
                     <AnimatePresence>
                       {rightPlayers.map((player, index) => {
                         const checkResult =
@@ -1675,6 +1696,7 @@ export default function Home() {
             )}
           </AnimatePresence>
         </div>
+        {process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" && <AiActivityPanel />}
       </div>
       )}
     </motion.div>
@@ -1736,7 +1758,6 @@ export default function Home() {
         isGameInProgress={gameInProgress || !!matchingRoster}
         onExitGame={restartGame}
       />
-      {gameStarted && process.env.NEXT_PUBLIC_ZERONE_HUB_MODE === "1" && <AiActivityPanel />}
 
       {/* 开发者模式 - 只在游戏开始后显示 */}
       {showTable && showDevTools && (

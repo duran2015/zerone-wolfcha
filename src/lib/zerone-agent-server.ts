@@ -77,7 +77,7 @@ export async function requestZeroneAgent(input: {
       (input.phase.includes("SPEECH") || input.phase === "DAY_LAST_WORDS"
         ? " 发言聚焦一两条关键证据，最多三句、120 个汉字；不要逐个点评所有玩家。"
         : ""),
-    publicMemory: await publicAgentMemory(input.playerId),
+    publicMemory: process.env.ZERONE_CROSS_GAME_MEMORY === "1" ? await publicAgentMemory(input.playerId) : [],
     messages: input.messages,
   });
   const upstream = await fetch(`${agentUrl(runtime)}/runs`, {
@@ -86,7 +86,7 @@ export async function requestZeroneAgent(input: {
     // Reusing a Runtime session would append previous full snapshots again on every turn.
     body: JSON.stringify({ message, stream: input.stream }),
     // Cancel Runtime generation when the browser abandons a prefetch or times out.
-    signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
+    signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(input.phase.includes("SPEECH") ? 120_000 : 45_000)]) : AbortSignal.timeout(input.phase.includes("SPEECH") ? 120_000 : 45_000),
     cache: "no-store",
   });
   if (!upstream.ok) return new Response(JSON.stringify({ error: `Zerone Agent returned HTTP ${upstream.status}` }), {
